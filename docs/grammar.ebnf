@@ -1,0 +1,30 @@
+prog = stmts ;
+
+stmts = [ sep ] [ stmt { sep stmt } ] [ sep ] ;
+sep   = ("," | "\n") { "," | "\n" } ;
+
+stmt = expr [ con_op expr ] ;
+con_op = 
+    "=" | "!=" | ">=" | "<=" | ">" | "<" | ":" ;
+
+expr  = prod { ("+" | "-") prod } ;
+prod  = unary { ("*" | "/") unary } ;
+unary = ("+" | "-") unary | postfix [ "^" unary ] ;
+
+postfix = primary { "." ident | "(" [ args ] ")" } ;
+
+args = arg { "," arg } ;
+arg  = [ ident "=" ] expr ;
+
+primary =
+    number
+  | ident
+  | "(" expr ")"
+  | model ;
+
+model  = [ ident ] "{" stmts "}" ;
+
+ident  = ( letter | "_" ) { letter | digit | "_" } ;
+number = digit { digit } [ "." digit { digit } ] ;
+letter = "a".."z" | "A".."Z" ;
+digit  = "0".."9" ;
