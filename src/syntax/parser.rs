@@ -1,161 +1,125 @@
-use chumsky::prelude::*;
+use chumsky::{input::ValueInput, prelude::*};
 
-use crate::syntax::PExtra;
-use crate::syntax::ast::{Arg, BinaryOp, ConstraintOp, Expr, Program, Stmt, UnaryOp};
-use crate::syntax::lexer::Token;
+use super::ast::*;
+use super::lexer::Token;
 
-#[derive(Clone)]
-enum Suffix {
-    Member(String),
-    Call(Vec<Arg>),
+use chumsky::pratt::{infix, left, postfix, prefix, right};
+
+pub type PErr<'src> = Rich<'src, Token>;
+type PExtra<'src> = extra::Err<PErr<'src>>;
+
+pub type Span = chumsky::span::SimpleSpan;
+pub type Spanned<T> = (T, Span);
+
+fn prefix_assoc(op: PrefixOp) -> u16 {
+    op.prec()
 }
 
-fn binary(lhs: Expr, op: BinaryOp, rhs: Expr) -> Expr {
-    Expr::Binary {
-        lhs: Box::new(lhs),
-        op,
-        rhs: Box::new(rhs),
+fn infix_assoc(op: InfixOp) -> chumsky::pratt::Associativity {
+    let p = op.prec();
+    match op.assoc() {
+        Assoc::Left => chumsky::pratt::left(p),
+        Assoc::Right => chumsky::pratt::right(p),
     }
 }
 
-// stmts = [ sep ] [ stmt { sep stmt } ] [ sep ]
-fn stmts_parser<'src>(
-    expr: impl Parser<'src, &'src [Token], Expr, PExtra<'src>> + Clone,
-) -> impl Parser<'src, &'src [Token], Vec<Stmt>, PExtra<'src>> + Clone {
-    let con_op = select! {
-        Token::Eq    => ConstraintOp::Eq,
-        Token::Ne    => ConstraintOp::Ne,
-        Token::Ge    => ConstraintOp::Ge,
-        Token::Le    => ConstraintOp::Le,
-        Token::Gt    => ConstraintOp::Gt,
-        Token::Lt    => ConstraintOp::Lt,
-        Token::Colon => ConstraintOp::Colon,
-    };
-
-    // stmt = expr [ con_op expr ]
-    let stmt = expr
-        .clone()
-        .then(con_op.then(expr).or_not())
-        .map(|(lhs, constraint)| match constraint {
-            Some((op, rhs)) => Stmt::Constraint { lhs, op, rhs },
-            None => Stmt::Query(lhs),
-        });
-
-    // sep = SEP { SEP }
-    let sep = just(Token::Sep).repeated().at_least(1).ignored();
-
-    sep.clone()
-        .or_not()
-        .ignore_then(stmt.separated_by(sep).allow_trailing().collect::<Vec<_>>())
+fn prefix_expr(op: PrefixOp, expr: Expr) -> Expr {
+    Expr::Prefix {
+        op,
+        expr: Box::new(expr),
+    }
 }
 
-pub fn parser<'src>() -> impl Parser<'src, &'src [Token], Program, PExtra<'src>> + Clone {
+fn infix_expr(l: Expr, op: InfixOp, r: Expr) -> Expr {
+    Expr::Infix {
+        l: Box::new(l),
+        op,
+        r: Box::new(r),
+    }
+}
+
+fn call_expr(fun: Expr, args: Vec<Expr>) -> Expr {
+    Expr::Call {
+        fun: Box::new(fun),
+        args,
+    }
+}
+
+pub fn parser<'src, I>() -> impl Parser<'src, I, Program, PExtra<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
     let expr = recursive::<_, Expr, PExtra<'src>, _, _>(|expr| {
         let ident = select! {
             Token::Ident(name) => name,
         };
 
         let number = select! {
-            Token::Num(value) => Expr::Num(value),
+            Token::Num(v) => Expr::Num(v),
         };
-
-        // arg = [ ident EQUALS ] expr
-        let arg = ident
-            .then_ignore(just(Token::Eq))
-            .or_not()
-            .then(expr.clone())
-            .map(|(key, val)| Arg { key, val });
-
-        // LPAR [ args ] RPAR
-        let call = arg
-            .separated_by(just(Token::Comma))
-            .collect::<Vec<_>>()
-            .delimited_by(just(Token::LParen), just(Token::RParen))
-            .map(Suffix::Call);
-
-        // DOT ident
-        let member = just(Token::Dot).ignore_then(ident).map(Suffix::Member);
-
-        // model = [ ident ] LBRACE stmts RBRACE
-        let model = ident
-            .or_not()
-            .then(stmts_parser(expr.clone()).delimited_by(just(Token::LBrace), just(Token::RBrace)))
-            .map(|(name, body)| Expr::Model { name, body });
 
         let grouped = expr
             .clone()
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
-        let primary = choice((model, number, ident.map(Expr::Ident), grouped));
+        let primary = choice((number, ident.map(Expr::Ident), grouped));
 
-        // postfix = primary { DOT ident | LPAR [ args ] RPAR }
-        let postfix = primary
-            .foldl(
-                choice((member, call)).repeated(),
-                |object, suffix| match suffix {
-                    Suffix::Member(field) => Expr::Member {
-                        obj: Box::new(object),
-                        field,
-                    },
-                    Suffix::Call(args) => Expr::Call {
-                        callee: Box::new(object),
-                        args,
-                    },
-                },
-            )
-            .boxed();
+        let call = expr
+            .clone()
+            .separated_by(just(Token::Comma))
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LParen), just(Token::RParen));
 
-        // unary = (PLUS | MINUS) unary | postfix [ SUP unary ]
-        let unary = recursive::<_, Expr, PExtra<'src>, _, _>(|unary| {
-            let unary_op = select! {
-                Token::Plus  => UnaryOp::Pos,
-                Token::Minus => UnaryOp::Neg,
-            };
+        let pow_op = select! {
+            Token::Sup => InfixOp::Pow
+        };
 
-            let prefix = unary_op.then(unary.clone()).map(|(op, expr)| Expr::Unary {
-                op,
-                expr: Box::new(expr),
-            });
-
-            let power = postfix
-                .clone()
-                .then(just(Token::Sup).ignore_then(unary).or_not())
-                .map(|(lhs, rhs)| match rhs {
-                    Some(rhs) => binary(lhs, BinaryOp::Pow, rhs),
-                    None => lhs,
-                });
-
-            choice((prefix, power))
-        });
+        let unary_op = select! {
+            Token::Plus  => PrefixOp::Pos,
+            Token::Minus => PrefixOp::Neg,
+        };
 
         let mul_op = select! {
-            Token::Star  => BinaryOp::Mul,
-            Token::Slash => BinaryOp::Div,
+            Token::Star  => InfixOp::Mul,
+            Token::Slash => InfixOp::Div,
         };
 
-        // prod = unary { (STAR | SLASH) unary }
-        let prod = unary
-            .clone()
-            .foldl(mul_op.then(unary).repeated(), |lhs, (op, rhs)| {
-                binary(lhs, op, rhs)
-            })
-            .boxed();
-
-        // expr = prod { (PLUS | MINUS) prod }
-        let add_op = select! {
-            Token::Plus  => BinaryOp::Add,
-            Token::Minus => BinaryOp::Sub,
+        let sum_op = select! {
+            Token::Plus  => InfixOp::Add,
+            Token::Minus => InfixOp::Sub,
         };
 
-        prod.clone()
-            .foldl(add_op.then(prod).repeated(), |lhs, (op, rhs)| {
-                binary(lhs, op, rhs)
-            })
+        let assign_op = select! {
+            Token::Eq => InfixOp::Assign
+        };
+
+        primary
+            .pratt((
+                infix(infix_assoc(InfixOp::Assign), assign_op, |l, op, r, _| {
+                    infix_expr(l, op, r)
+                }),
+                infix(infix_assoc(InfixOp::Add), sum_op, |l, op, r, _| {
+                    infix_expr(l, op, r)
+                }),
+                infix(infix_assoc(InfixOp::Mul), mul_op, |l, op, r, _| {
+                    infix_expr(l, op, r)
+                }),
+                prefix(prefix_assoc(PrefixOp::Pos), unary_op, |op, expr, _| {
+                    prefix_expr(op, expr)
+                }),
+                infix(infix_assoc(InfixOp::Pow), pow_op, |l, op, r, _| {
+                    infix_expr(l, op, r)
+                }),
+                postfix(CALL_BP, call, |fun, args, _| call_expr(fun, args)),
+            ))
             .boxed()
     });
 
-    // prog = stmts
-    stmts_parser(expr)
-        .map(|stmts| Program { stmts })
+    let sep = just(Token::Sep).repeated().at_least(1).ignored();
+
+    sep.clone()
+        .or_not()
+        .ignore_then(expr.separated_by(sep).allow_trailing().collect::<Vec<_>>())
+        .map(|exprs| Program { exprs })
         .then_ignore(end())
 }

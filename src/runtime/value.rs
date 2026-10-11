@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
-    Discrete(Vec<f64>),              // discrete set of solutions
-    Interval { min: f64, max: f64 }, // continous interval (min, max)
-    Instance(Arc<Scope>),            // internal scope
-    Residual(Expr),                  // residual expr when unbound variables are remaining
+    Symbol,
+    Discrete(Vec<),  // discrete set of solutions
+    Instance(Arc<Scope>), // internal scope
+    Residual(Expr),       // residual expr when unbound variables are remaining
     Empty,
 }
 
@@ -33,49 +33,6 @@ impl fmt::Display for Value {
             }
             Value::Residual(expr) => write!(f, "{expr}"),
             Value::Empty => write!(f, "∅"),
-        }
-    }
-}
-
-impl fmt::Display for Expr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Expr::Num(n) => write!(f, "{n}"),     //[cite: 2]
-            Expr::Ident(id) => write!(f, "{id}"), //[cite: 2]
-            Expr::Unary { op, expr } => match op {
-                //[cite: 2]
-                UnaryOp::Pos => write!(f, "+{expr}"), //[cite: 2]
-                UnaryOp::Neg => write!(f, "-{expr}"), //[cite: 2]
-            },
-            Expr::Binary { op, lhs, rhs } => {
-                //[cite: 2]
-                let symbol = match op {
-                    //[cite: 2]
-                    BinaryOp::Add => "+", //[cite: 2]
-                    BinaryOp::Sub => "-", //[cite: 2]
-                    BinaryOp::Mul => "*", //[cite: 2]
-                    BinaryOp::Div => "/", //[cite: 2]
-                    BinaryOp::Pow => "^", //[cite: 2]
-                };
-                write!(f, "({lhs} {symbol} {rhs})")
-            }
-            Expr::Member { obj, field } => write!(f, "{obj}.{field}"), //[cite: 2]
-            Expr::Call { callee, args } => {
-                //[cite: 2]
-                let rendered_args: Vec<String> = args //[cite: 2]
-                    .iter()
-                    .map(|arg| match &arg.key {
-                        //[cite: 2]
-                        Some(k) => format!("{k} = {}", arg.val), //[cite: 2]
-                        None => format!("{}", arg.val),          //[cite: 2]
-                    })
-                    .collect();
-                write!(f, "{callee}({})", rendered_args.join(", "))
-            }
-            Expr::Model { name, .. } => {
-                //[cite: 2]
-                write!(f, "{} {{ ... }}", name.as_deref().unwrap_or("anon")) //[cite: 2]
-            }
         }
     }
 }
@@ -113,10 +70,10 @@ impl Value {
         }
     }
 
-    pub fn apply_binary(&self, op: BinaryOp, rhs: &Self) -> Self {
-        match (self, rhs) {
-            (Value::Discrete(lhs_vals), Value::Discrete(rhs_vals)) => {
-                Self::minkowski_discrete(lhs_vals, op, rhs_vals)
+    pub fn apply_binary(&self, op: BinaryOp, r: &Self) -> Self {
+        match (self, r) {
+            (Value::Discrete(l_vals), Value::Discrete(r_vals)) => {
+                Self::minkowski_discrete(l_vals, op, r_vals)
             }
 
             (Value::Interval { min: a, max: b }, Value::Interval { min: c, max: d }) => {
@@ -185,21 +142,21 @@ impl Value {
                 }
             }
 
-            (Value::Residual(lhs), Value::Residual(rhs)) => Value::Residual(Expr::Binary {
+            (Value::Residual(l), Value::Residual(r)) => Value::Residual(Expr::Binary {
                 op,
-                lhs: Box::new(lhs.clone()),
-                rhs: Box::new(rhs.clone()),
+                l: Box::new(l.clone()),
+                r: Box::new(r.clone()),
             }),
 
             _ => Self::empty(),
         }
     }
 
-    fn minkowski_discrete(lhs: &[f64], op: BinaryOp, rhs: &[f64]) -> Self {
-        let mut results = Vec::with_capacity(lhs.len() * rhs.len());
+    fn minkowski_discrete(l: &[f64], op: BinaryOp, r: &[f64]) -> Self {
+        let mut results = Vec::with_capacity(l.len() * r.len());
 
-        for &a in lhs {
-            for &b in rhs {
+        for &a in l {
+            for &b in r {
                 let res = match op {
                     BinaryOp::Add => Some(a + b),
                     BinaryOp::Sub => Some(a - b),

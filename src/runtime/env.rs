@@ -3,28 +3,6 @@ use crate::syntax::ast::Expr;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-#[derive(Debug, thiserror::Error, PartialEq)]
-pub enum EvalError {
-    #[error("Parse number error for '{0}'")]
-    InvalidNumber(String),
-
-    #[error("Field access '{field}' on non-model value: {obj:?}")]
-    FieldAccessOnNonModel { obj: Value, field: String },
-
-    #[error("Cannot apply positional arguments to '{0}': no declared signature")]
-    MissingSignature(String),
-
-    #[error("Too many positional arguments for '{name}': expected {expected}, got {got}")]
-    TooManyPositionalArgs {
-        name: String,
-        expected: usize,
-        got: usize,
-    },
-
-    #[error("Cyclic dependency detected while resolving symbol '{0}'")]
-    RecursionCycle(String),
-}
-
 #[derive(Debug, Default)]
 pub struct Scope {
     parent: Option<Arc<Scope>>,

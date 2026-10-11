@@ -1,83 +1,87 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::runtime::env::{EvalError, Scope};
+use crate::runtime::env::Scope;
 use crate::runtime::value::Value;
 use crate::syntax::ast::{ConstraintOp, Expr, Stmt};
+use thiserror::Error;
 
-/// Public entry point for expression evaluation
-pub fn eval_expr(expr: &Expr, scope: &Arc<Scope>) -> Result<Value, EvalError> {
-    let mut visited = HashSet::new();
-    eval_expr_internal(expr, scope, &mut visited)
+#[derive(Debug, Error, PartialEq)]
+pub enum EvalError {
+    #[error("Parse number error for '{0}'")]
+    InvalidNumber(String),
+
+    #[error("Field access '{field}' on non-model value: {obj:?}")]
+    FieldAccessOnNonModel { obj: Value, field: String },
+
+    #[error("Cannot apply positional arguments to '{0}': no declared signature")]
+    MissingSignature(String),
+
+    #[error("Too many positional arguments for '{name}': expected {expected}, got {got}")]
+    TooManyPositionalArgs {
+        name: String,
+        expected: usize,
+        got: usize,
+    },
+
+    #[error("Cyclic dependency detected while resolving symbol '{0}'")]
+    RecursionCycle(String),
 }
 
-fn eval_expr_internal(
+pub fn eval_expr(expr: &Expr, scope: &Arc<Scope>) -> Result<Value, EvalError> {
+    _eval_expr(expr, scope, &mut HashSet::new())
+}
+
+fn _eval_expr(
     expr: &Expr,
     scope: &Arc<Scope>,
-    visited: &mut HashSet<String>,
+    env: &mut HashSet<String>,
 ) -> Result<Value, EvalError> {
     match expr {
-        // --- Numbers ---
         Expr::Num(raw) => raw
             .parse::<f64>()
             .map(Value::number)
             .map_err(|_| EvalError::InvalidNumber(raw.clone())),
 
-        // --- Identifiers ---
         Expr::Ident(name) => {
-            // 1. Check if bound to an explicit value (overrides/constants)
             if let Some(val) = scope.get_value(name) {
                 return Ok(val);
             }
 
-            // 2. Check if bound to an AST formula
             if let Some(formula) = scope.get_binding(name) {
-                if visited.contains(name) {
+                if env.contains(name) {
                     return Err(EvalError::RecursionCycle(name.clone()));
                 }
 
-                visited.insert(name.clone());
-                // Evaluate formula within *current* scope so child-frame overrides apply!
-                let res = eval_expr_internal(&formula, scope, visited);
-                visited.remove(name);
+                env.insert(name.clone());
+                let res = _eval_expr(&formula, scope, env);
+                env.remove(name);
                 return res;
             }
 
-            // 3. Fallback: Unbound variable becomes a residual expression
-            Ok(Value::Residual(Expr::Ident(name.clone()))) //[cite: 2]
+            Ok(Value::Residual(Expr::Ident(name.clone())))
         }
 
-        // --- Unary Operations ---
-        Expr::Unary { op, expr } => {
-            //[cite: 2]
-            let val = eval_expr_internal(expr, scope, visited)?;
-            Ok(val.apply_unary(*op))
-        }
+        Expr::Unary { op, expr } => Ok(_eval_expr(expr, scope, env)?.apply_unary(*op)),
 
-        // --- Binary Operations ---
-        Expr::Binary { op, lhs, rhs } => {
-            //[cite: 2]
-            let l_val = eval_expr_internal(lhs, scope, visited)?;
-            let r_val = eval_expr_internal(rhs, scope, visited)?;
+        Expr::Binary { op, l, r } => {
+            let l_val = _eval_expr(l, scope, env)?;
+            let r_val = _eval_expr(r, scope, env)?;
 
-            // If either operand is residual, fold into a residual AST
             if (matches!(l_val, Value::Residual(_)) || matches!(r_val, Value::Residual(_)))
                 && let (Some(l_expr), Some(r_expr)) = (l_val.to_expr(), r_val.to_expr())
             {
                 return Ok(Value::Residual(Expr::Binary {
-                    //[cite: 2]
                     op: *op,
-                    lhs: Box::new(l_expr),
-                    rhs: Box::new(r_expr),
+                    l: Box::new(l_expr),
+                    r: Box::new(r_expr),
                 }));
             }
 
             Ok(l_val.apply_binary(*op, &r_val))
         }
 
-        // --- Models / Encapsulated Scopes ---
         Expr::Model { body, .. } => {
-            //[cite: 2]
             let model_scope = Scope::new_child(Arc::clone(scope));
             for stmt in body {
                 exec_stmt(stmt, &model_scope)?;
@@ -85,13 +89,11 @@ fn eval_expr_internal(
             Ok(Value::Instance(model_scope))
         }
 
-        // --- Field Access (.field) ---
         Expr::Member { obj, field } => {
-            //[cite: 2]
-            let target_val = eval_expr_internal(obj, scope, visited)?;
-            match target_val {
+            let tgt_val = _eval_expr(obj, scope, env)?;
+            match tgt_val {
                 Value::Instance(inst_scope) => {
-                    eval_expr_internal(&Expr::Ident(field.clone()), &inst_scope, visited) //[cite: 2]
+                    _eval_expr(&Expr::Ident(field.clone()), &inst_scope, env)
                 }
                 other => Err(EvalError::FieldAccessOnNonModel {
                     obj: other,
@@ -100,100 +102,74 @@ fn eval_expr_internal(
             }
         }
 
-        // --- Call / Contextual Substitution ---
-        Expr::Call { callee, args } => {
-            //[cite: 2]
-            // Extract callee identifier if applicable (to read signatures)
-            let callee_name = match callee.as_ref() {
-                Expr::Ident(name) => Some(name.as_str()), //[cite: 2]
+        Expr::Call { callee: fun, args } => {
+            let fun_name = match fun.as_ref() {
+                Expr::Ident(name) => Some(name.as_str()),
                 _ => None,
             };
 
-            let signature = callee_name.and_then(|name| scope.get_signature(name));
-
-            // Create a child substitution frame
+            let sig = fun_name.and_then(|name| scope.get_signature(name));
             let child_scope = Scope::new_child(Arc::clone(scope));
 
             for (i, arg) in args.iter().enumerate() {
-                //[cite: 2]
-                // Arguments are evaluated in the caller's scope
-                let arg_val = eval_expr_internal(&arg.val, scope, visited)?; //[cite: 2]
+                let arg_val = _eval_expr(&arg.val, scope, env)?;
 
                 if let Some(param_name) = &arg.key {
-                    //[cite: 2]
-                    // Named keyword override: x(y = 3)
                     child_scope.insert_value(param_name.clone(), arg_val);
-                } else if let Some(sig) = &signature {
-                    // Positional substitution: x(3) mapped via signature
+                } else if let Some(sig) = &sig {
                     if i < sig.len() {
                         child_scope.insert_value(sig[i].clone(), arg_val);
                     } else {
                         return Err(EvalError::TooManyPositionalArgs {
-                            name: callee_name.unwrap_or("anonymous").to_string(),
+                            name: fun_name.unwrap_or("<fn>").to_string(),
                             expected: sig.len(),
-                            got: args.len(), //[cite: 2]
+                            got: args.len(),
                         });
                     }
                 } else {
                     return Err(EvalError::MissingSignature(
-                        callee_name.unwrap_or("anonymous").to_string(),
+                        fun_name.unwrap_or("<fn>").to_string(),
                     ));
                 }
             }
 
-            // Evaluate the callee inside the child scope containing overrides
-            eval_expr_internal(callee, &child_scope, visited)
+            _eval_expr(fun, &child_scope, env)
         }
     }
 }
 
-/// Executes a statement against a scope
 pub fn exec_stmt(stmt: &Stmt, scope: &Arc<Scope>) -> Result<Option<Value>, EvalError> {
-    //[cite: 2]
     match stmt {
-        Stmt::Query(expr) => {
-            //[cite: 2]
-            let val = eval_expr(expr, scope)?;
-            Ok(Some(val))
-        }
+        Stmt::Query(expr) => Ok(Some(eval_expr(expr, scope)?)),
 
         Stmt::Constraint {
-            lhs,
+            l,
             op: ConstraintOp::Eq,
-            rhs,
+            r,
         } => {
-            //[cite: 2]
-            match lhs {
-                // Signature definition: x(y) = y - 1
-                Expr::Call { callee, args } => {
-                    //[cite: 2]
-                    if let Expr::Ident(name) = callee.as_ref() {
-                        //[cite: 2]
+            match l {
+                Expr::Call { callee: fun, args } => {
+                    if let Expr::Ident(name) = fun.as_ref() {
                         let mut params = Vec::new();
                         for arg in args {
-                            //[cite: 2]
                             if let Expr::Ident(p) = &arg.val {
-                                //[cite: 2]
                                 params.push(p.clone());
                             }
                         }
                         scope.insert_signature(name, params);
-                        scope.insert_binding(name, rhs.clone());
+                        scope.insert_binding(name, r.clone());
                         return Ok(None);
                     }
                 }
 
-                // Simple variable assignment: x = y - 1
                 Expr::Ident(name) => {
-                    //[cite: 2]
-                    scope.insert_binding(name, rhs.clone());
+                    scope.insert_binding(name, r.clone());
                     return Ok(None);
                 }
 
                 _ => {}
             }
 
-            // Non-trivial equality relations (e.g. x^2 = 1) will feed into the constraint solver
             Ok(None)
         }
 
@@ -204,43 +180,35 @@ pub fn exec_stmt(stmt: &Stmt, scope: &Arc<Scope>) -> Result<Option<Value>, EvalE
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::syntax::ast::*; //[cite: 2]
+    use crate::syntax::ast::*;
 
     #[test]
     fn test_positional_and_keyword_substitution() {
         let scope = Arc::new(Scope::default());
 
-        // x(y) = y - 1
         let def = Stmt::Constraint {
-            //[cite: 2]
-            lhs: Expr::Call {
-                //[cite: 2]
-                callee: Box::new(Expr::Ident("x".into())), //[cite: 2]
-                args: vec![Arg::positional(Expr::Ident("y".into()))], //[cite: 2]
+            l: Expr::Call {
+                callee: Box::new(Expr::Ident("x".into())),
+                args: vec![Arg::positional(Expr::Ident("y".into()))],
             },
-            op: ConstraintOp::Eq, //[cite: 2]
-            rhs: Expr::Binary {
-                //[cite: 2]
-                op: BinaryOp::Sub,                      //[cite: 2]
-                lhs: Box::new(Expr::Ident("y".into())), //[cite: 2]
-                rhs: Box::new(Expr::Num("1".into())),   //[cite: 2]
+            op: ConstraintOp::Eq,
+            r: Expr::Binary {
+                op: BinaryOp::Sub,
+                l: Box::new(Expr::Ident("y".into())),
+                r: Box::new(Expr::Num("1".into())),
             },
         };
         exec_stmt(&def, &scope).unwrap();
 
-        // Query: x(3)
         let pos_call = Expr::Call {
-            //[cite: 2]
-            callee: Box::new(Expr::Ident("x".into())), //[cite: 2]
-            args: vec![Arg::positional(Expr::Num("3".into()))], //[cite: 2]
+            callee: Box::new(Expr::Ident("x".into())),
+            args: vec![Arg::positional(Expr::Num("3".into()))],
         };
         assert_eq!(eval_expr(&pos_call, &scope).unwrap(), Value::number(2.0));
 
-        // Query: x(y = 5)
         let kw_call = Expr::Call {
-            //[cite: 2]
-            callee: Box::new(Expr::Ident("x".into())), //[cite: 2]
-            args: vec![Arg::keyword("y", Expr::Num("5".into()))], //[cite: 2]
+            callee: Box::new(Expr::Ident("x".into())),
+            args: vec![Arg::keyword("y", Expr::Num("5".into()))],
         };
         assert_eq!(eval_expr(&kw_call, &scope).unwrap(), Value::number(4.0));
     }
@@ -249,33 +217,27 @@ mod tests {
     fn test_deep_propagation() {
         let scope = Arc::new(Scope::default());
 
-        // B = C + 1
         scope.insert_binding(
             "B",
             Expr::Binary {
-                //[cite: 2]
-                op: BinaryOp::Add,                      //[cite: 2]
-                lhs: Box::new(Expr::Ident("C".into())), //[cite: 2]
-                rhs: Box::new(Expr::Num("1".into())),   //[cite: 2]
+                op: BinaryOp::Add,
+                l: Box::new(Expr::Ident("C".into())),
+                r: Box::new(Expr::Num("1".into())),
             },
         );
 
-        // A = B * 2
         scope.insert_binding(
             "A",
             Expr::Binary {
-                //[cite: 2]
-                op: BinaryOp::Mul,                      //[cite: 2]
-                lhs: Box::new(Expr::Ident("B".into())), //[cite: 2]
-                rhs: Box::new(Expr::Num("2".into())),   //[cite: 2]
+                op: BinaryOp::Mul,
+                l: Box::new(Expr::Ident("B".into())),
+                r: Box::new(Expr::Num("2".into())),
             },
         );
 
-        // Query: A(C = 5) -> B becomes 6 -> A becomes 12
         let call = Expr::Call {
-            //[cite: 2]
-            callee: Box::new(Expr::Ident("A".into())), //[cite: 2]
-            args: vec![Arg::keyword("C", Expr::Num("5".into()))], //[cite: 2]
+            callee: Box::new(Expr::Ident("A".into())),
+            args: vec![Arg::keyword("C", Expr::Num("5".into()))],
         };
 
         assert_eq!(eval_expr(&call, &scope).unwrap(), Value::number(12.0));
@@ -285,27 +247,25 @@ mod tests {
     fn test_partial_evaluation_residual() {
         let scope = Arc::new(Scope::default());
 
-        // f = x + y
         scope.insert_binding(
             "f",
             Expr::Binary {
-                op: BinaryOp::Add,                      //[cite: 2]
-                lhs: Box::new(Expr::Ident("x".into())), //[cite: 2]
-                rhs: Box::new(Expr::Ident("y".into())), //[cite: 2]
+                op: BinaryOp::Add,
+                l: Box::new(Expr::Ident("x".into())),
+                r: Box::new(Expr::Ident("y".into())),
             },
         );
 
-        // Query: f(x = 2) -> y is still unbound -> returns Residual(2 + y)
         let call = Expr::Call {
-            callee: Box::new(Expr::Ident("f".into())), //[cite: 2]
-            args: vec![Arg::keyword("x", Expr::Num("2".into()))], //[cite: 2]
+            callee: Box::new(Expr::Ident("f".into())),
+            args: vec![Arg::keyword("x", Expr::Num("2".into()))],
         };
 
         match eval_expr(&call, &scope).unwrap() {
-            Value::Residual(Expr::Binary { op, lhs, rhs }) => {
-                assert_eq!(op, BinaryOp::Add); //[cite: 2]
-                assert_eq!(*lhs, Expr::Num("2".into())); //[cite: 2]
-                assert_eq!(*rhs, Expr::Ident("y".into())); //[cite: 2]
+            Value::Residual(Expr::Binary { op, l, r }) => {
+                assert_eq!(op, BinaryOp::Add);
+                assert_eq!(*l, Expr::Num("2".into()));
+                assert_eq!(*r, Expr::Ident("y".into()));
             }
             other => panic!("Expected residual expression, got {other:?}"),
         }

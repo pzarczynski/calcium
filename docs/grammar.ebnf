@@ -1,30 +1,19 @@
-prog = stmts ;
+prog = [ expr { ";" expr } ] ;
 
-stmts = [ sep ] [ stmt { sep stmt } ] [ sep ] ;
-sep   = ("," | "\n") { "," | "\n" } ;
-
-stmt = expr [ con_op expr ] ;
-con_op = 
-    "=" | "!=" | ">=" | "<=" | ">" | "<" | ":" ;
-
-expr  = prod { ("+" | "-") prod } ;
-prod  = unary { ("*" | "/") unary } ;
+expr  = sum     [ "=" expr ] ;
+sum   = prod    { ("+" | "-") prod  } ;
+prod  = unary   { ("*" | "/") unary } ;
 unary = ("+" | "-") unary | postfix [ "^" unary ] ;
 
-postfix = primary { "." ident | "(" [ args ] ")" } ;
-
-args = arg { "," arg } ;
-arg  = [ ident "=" ] expr ;
+postfix = primary { "(" [ args ] ")" } ;
+args    = expr { "," expr } ;
 
 primary =
     number
   | ident
   | "(" expr ")"
-  | model ;
 
-model  = [ ident ] "{" stmts "}" ;
-
-ident  = ( letter | "_" ) { letter | digit | "_" } ;
-number = digit { digit } [ "." digit { digit } ] ;
-letter = "a".."z" | "A".."Z" ;
-digit  = "0".."9" ;
+ident   = ( letter | "_" ) { letter | digit | "_" } ;
+number  = digit { digit } ;
+letter  = "a".."z" | "A".."Z" ;
+digit   = "0".."9" ;
