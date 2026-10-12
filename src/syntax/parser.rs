@@ -51,7 +51,7 @@ where
 {
     let expr = recursive::<_, Expr, PExtra<'src>, _, _>(|expr| {
         let ident = select! {
-            Token::Ident(name) => name,
+            Token::Ident(name) => Expr::Ident(name),
         };
 
         let number = select! {
@@ -62,7 +62,7 @@ where
             .clone()
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
-        let primary = choice((number, ident.map(Expr::Ident), grouped));
+        let primary = choice((number, ident, grouped));
 
         let call = expr
             .clone()

@@ -43,9 +43,9 @@ impl fmt::Display for Expr {
 }
 
 impl Expr {
-    pub fn binding_power(&self) -> u16 {
+    pub fn bp(&self) -> u16 {
         match self {
-            Expr::Num(_) | Expr::Ident(_) => ATOM_BP,
+            Expr::Num(_) | Expr::Ident(_) => MAX_BP,
             Expr::Call { .. } => CALL_BP,
             Expr::Prefix { op, .. } => op.prec(),
             Expr::Infix { op, .. } => op.prec(),
@@ -53,60 +53,50 @@ impl Expr {
     }
 
     fn format(&self, f: &mut fmt::Formatter<'_>, parent_bp: u16) -> fmt::Result {
-        let needs_parens = self.binding_power() < parent_bp;
+        let needs_parens = self.bp() < parent_bp;
         if needs_parens {
-            write!(f, "(")?;
+            f.write_str("(")?;
         }
 
         match self {
-            Expr::Num(n) => write!(f, "{n}")?,
-            Expr::Ident(id) => write!(f, "{id}")?,
+            Self::Num(value) | Self::Ident(value) => f.write_str(value)?,
 
-            Expr::Prefix { op, expr } => {
-                let sym = match op {
-                    PrefixOp::Pos => "+",
-                    PrefixOp::Neg => "-",
+            Self::Prefix { op, expr } => {
+                let bp = if matches!(expr.as_ref(), Self::Prefix { .. }) {
+                    MAX_BP
+                } else {
+                    op.prec()
                 };
-                write!(f, "{sym}")?;
 
-                if matches!(&**expr, Expr::Prefix { op: inner, .. } if inner == op) {
-                    write!(f, " ")?;
-                }
-
-                expr.format(f, op.prec())?;
+                write!(f, "{op}")?;
+                expr.format(f, bp)?;
             }
 
-            Expr::Infix { op, l, r } => {
-                let sym = match op {
-                    InfixOp::Assign => "=",
-                    InfixOp::Add => "+",
-                    InfixOp::Sub => "-",
-                    InfixOp::Mul => "*",
-                    InfixOp::Div => "/",
-                    InfixOp::Pow => "^",
-                };
-
+            Self::Infix { op, l, r } => {
                 let (l_bp, r_bp) = op.bp();
+
                 l.format(f, l_bp)?;
-                write!(f, " {sym} ")?;
+                write!(f, " {op} ")?;
                 r.format(f, r_bp)?;
             }
 
-            Expr::Call { fun, args } => {
+            Self::Call { fun, args } => {
                 fun.format(f, CALL_BP)?;
-                write!(f, "(")?;
+                f.write_str("(")?;
+
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
-                        write!(f, ", ")?;
+                        f.write_str(", ")?;
                     }
                     arg.format(f, 0)?;
                 }
-                write!(f, ")")?;
+
+                f.write_str(")")?;
             }
         }
 
         if needs_parens {
-            write!(f, ")")?;
+            f.write_str(")")?;
         }
 
         Ok(())
@@ -128,6 +118,7 @@ pub enum InfixOp {
     Pow,
     Assign,
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Assoc {
     Left,
@@ -160,6 +151,20 @@ impl InfixOp {
     }
 }
 
+impl fmt::Display for InfixOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let sym = match self {
+            InfixOp::Assign => "=",
+            InfixOp::Add => "+",
+            InfixOp::Sub => "-",
+            InfixOp::Mul => "*",
+            InfixOp::Div => "/",
+            InfixOp::Pow => "^",
+        };
+        write!(f, "{sym}")
+    }
+}
+
 impl PrefixOp {
     pub fn prec(self) -> u16 {
         match self {
@@ -173,5 +178,15 @@ impl PrefixOp {
     }
 }
 
+impl fmt::Display for PrefixOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let sym = match self {
+            PrefixOp::Pos => "+",
+            PrefixOp::Neg => "-",
+        };
+        write!(f, "{sym}")
+    }
+}
+
 pub const CALL_BP: u16 = 60;
-pub const ATOM_BP: u16 = u16::MAX;
+pub const MAX_BP: u16 = u16::MAX;
