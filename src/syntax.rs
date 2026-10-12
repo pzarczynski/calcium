@@ -1,4 +1,3 @@
-use chumsky::prelude::*;
 use logos::Logos as _;
 
 pub mod ast;

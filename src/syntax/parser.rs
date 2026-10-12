@@ -1,15 +1,50 @@
-use chumsky::{input::ValueInput, prelude::*};
+use logos::Span;
 
 use super::ast::*;
-use super::lexer::Token;
+use super::lexer::{Spanned, Token};
+use std::iter::Peekable;
 
-use chumsky::pratt::{infix, left, postfix, prefix, right};
+#[derive(Debug, Clone, PartialEq)]
+pub struct PErr<'src> {
+    pub span: Span,
+    pub msg: String,
+    pub expected: Option<&'static str>,
+    pub got: Option<&'src str>,
+}
 
-pub type PErr<'src> = Rich<'src, Token>;
-type PExtra<'src> = extra::Err<PErr<'src>>;
+pub trait Parsable<'src>: Sized {
+    fn parse<I>(src: &mut Peekable<I>) -> Result<Self, Vec<PErr<'src>>>
+    where
+        I: Iterator<Item = Spanned<Token<'src>>>;
+}
 
-pub type Span = chumsky::span::SimpleSpan;
-pub type Spanned<T> = (T, Span);
+impl<'src> Parsable<'src> for Program {
+    fn parse<I>(src: &mut Peekable<I>) -> Result<Self, Vec<PErr<'src>>>
+    where
+        I: Iterator<Item = Spanned<Token<'src>>>,
+    {
+        let mut exprs = Vec::new();
+        let mut errors = Vec::new();
+
+        while let Some((tok, span)) = src.peek() {
+            match tok {
+                Token::Sep => {
+                    src.next();
+                }
+                _ => match Expr::parse(src) {
+                    Ok(expr) => exprs.push(expr),
+                    Err(mut errs) => errors.append(&mut errs),
+                },
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(Program { exprs })
+        } else {
+            Err(errors)
+        }
+    }
+}
 
 fn prefix_assoc(op: PrefixOp) -> u16 {
     op.prec()
