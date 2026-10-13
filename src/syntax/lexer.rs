@@ -1,7 +1,21 @@
 use logos::Logos;
 use std::{fmt, ops::Range};
 
-pub type Span = Range<usize>;
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl<T: Into<usize>> From<Range<T>> for Span {
+    fn from(r: Range<T>) -> Self {
+        Span {
+            start: r.start.into(),
+            end: r.end.into(),
+        }
+    }
+}
+
 pub type Spanned<T> = (T, Span);
 
 pub trait Lexable<'src>: Sized {
@@ -26,14 +40,29 @@ where
 #[derive(Logos, Debug, Clone, PartialEq, Eq, Hash)]
 #[logos(skip r"[ \t\f]+")]
 pub enum Token<'src> {
-    #[regex(r";")]
+    #[regex(r"\n|\r\n|;")]
     Sep,
 
     #[token("=")]
     Eq,
 
-    #[token(":")]
-    Colon,
+    #[token("fn")]
+    Fn,
+
+    #[token("return")]
+    Return,
+
+    #[token("(")]
+    LParen,
+
+    #[token(")")]
+    RParen,
+
+    #[token("{")]
+    LBrack,
+
+    #[token("}")]
+    RBrack,
 
     #[token("+")]
     Plus,
@@ -47,19 +76,10 @@ pub enum Token<'src> {
     #[token("/")]
     Slash,
 
-    #[token("^")]
-    Sup,
-
     #[token(",")]
     Comma,
 
-    #[token("(")]
-    LParen,
-
-    #[token(")")]
-    RParen,
-
-    #[regex(r"[0-9]+(\.[0-9]+)?", |lex| lex.slice())]
+    #[regex(r"[0-9]+", |lex| lex.slice())]
     Num(&'src str),
 
     #[regex("[A-Za-z_][a-zA-Z0-9_]*", |lex| lex.slice())]
@@ -71,15 +91,17 @@ impl fmt::Display for Token<'_> {
         match self {
             Token::Sep => write!(f, ";"),
             Token::Eq => write!(f, "="),
-            Token::Colon => write!(f, ":"),
+            Token::Fn => write!(f, "fn"),
+            Token::Return => write!(f, "return"),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),
             Token::Star => write!(f, "*"),
             Token::Slash => write!(f, "/"),
-            Token::Sup => write!(f, "^"),
             Token::Comma => write!(f, ","),
             Token::LParen => write!(f, "("),
             Token::RParen => write!(f, ")"),
+            Token::LBrack => write!(f, "{{"),
+            Token::RBrack => write!(f, "}}"),
             Token::Num(n) => write!(f, "{n}"),
             Token::Ident(id) => write!(f, "{id}"),
         }

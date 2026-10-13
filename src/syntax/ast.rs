@@ -1,19 +1,76 @@
 use std::fmt;
+use std::ops;
+
+use crate::Token;
+
+pub type Program = Stmts;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Program {
-    pub exprs: Vec<Expr>,
+pub struct Stmts(pub Vec<Stmt>);
+
+impl ops::Deref for Stmts {
+    type Target = Vec<Stmt>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
-impl fmt::Display for Program {
+impl ops::DerefMut for Stmts {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<Vec<Stmt>> for Stmts {
+    fn from(v: Vec<Stmt>) -> Self {
+        Stmts(v)
+    }
+}
+
+impl fmt::Display for Stmts {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, expr) in self.exprs.iter().enumerate() {
+        for (i, stmt) in self.iter().enumerate() {
             if i > 0 {
                 write!(f, "; ")?;
             }
-            write!(f, "{expr}")?;
+            write!(f, "{stmt}")?;
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Stmt {
+    Expr(Expr),
+    Assign {
+        lhs: Expr,
+        rhs: Expr,
+    },
+    FnDef {
+        name: String,
+        args: Vec<String>,
+        body: Box<Stmts>,
+    },
+    Return(Expr),
+}
+
+impl fmt::Display for Stmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Stmt::Expr(expr) => write!(f, "{expr}"),
+            Stmt::Assign { lhs, rhs } => write!(f, "{lhs} = {rhs}"),
+            Stmt::FnDef { name, args, body } => {
+                write!(f, "fn {name}(")?;
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{arg}")?;
+                }
+                write!(f, ") {{ {} }}", body)
+            }
+            Stmt::Return(expr) => write!(f, "return {expr}"),
+        }
     }
 }
 
@@ -46,9 +103,9 @@ impl Expr {
     pub fn bp(&self) -> u16 {
         match self {
             Expr::Num(_) | Expr::Ident(_) => MAX_BP,
-            Expr::Call { .. } => CALL_BP,
             Expr::Prefix { op, .. } => op.prec(),
             Expr::Infix { op, .. } => op.prec(),
+            Expr::Call { .. } => MAX_BP,
         }
     }
 
@@ -67,8 +124,8 @@ impl Expr {
         }
     }
 
-    fn format(&self, f: &mut fmt::Formatter<'_>, parent_bp: u16) -> fmt::Result {
-        let needs_parens = self.bp() < parent_bp;
+    fn format(&self, f: &mut fmt::Formatter<'_>, min_bp: u16) -> fmt::Result {
+        let needs_parens = self.bp() < min_bp;
         if needs_parens {
             f.write_str("(")?;
         }
@@ -96,7 +153,7 @@ impl Expr {
             }
 
             Self::Call { fun, args } => {
-                fun.format(f, CALL_BP)?;
+                fun.format(f, MAX_BP)?;
                 f.write_str("(")?;
 
                 for (i, arg) in args.iter().enumerate() {
@@ -130,8 +187,6 @@ pub enum InfixOp {
     Sub,
     Mul,
     Div,
-    Pow,
-    Assign,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,16 +198,13 @@ pub enum Assoc {
 impl InfixOp {
     pub fn prec(self) -> u16 {
         match self {
-            InfixOp::Assign => 10,
             InfixOp::Add | InfixOp::Sub => 20,
             InfixOp::Mul | InfixOp::Div => 30,
-            InfixOp::Pow => 40,
         }
     }
 
     pub fn assoc(self) -> Assoc {
         match self {
-            InfixOp::Pow | InfixOp::Assign => Assoc::Right,
             InfixOp::Add | InfixOp::Sub | InfixOp::Mul | InfixOp::Div => Assoc::Left,
         }
     }
@@ -166,6 +218,20 @@ impl InfixOp {
     }
 }
 
+impl TryFrom<&Token<'_>> for InfixOp {
+    type Error = ();
+
+    fn try_from(value: &Token) -> Result<Self, Self::Error> {
+        match value {
+            Token::Plus => Ok(InfixOp::Add),
+            Token::Minus => Ok(InfixOp::Sub),
+            Token::Star => Ok(InfixOp::Mul),
+            Token::Slash => Ok(InfixOp::Div),
+            _ => Err(()),
+        }
+    }
+}
+
 impl fmt::Display for InfixOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let sym = match self {
@@ -173,8 +239,6 @@ impl fmt::Display for InfixOp {
             InfixOp::Sub => "-",
             InfixOp::Mul => "*",
             InfixOp::Div => "/",
-            InfixOp::Pow => "^",
-            InfixOp::Assign => "=",
         };
         write!(f, "{sym}")
     }
@@ -193,6 +257,18 @@ impl PrefixOp {
     }
 }
 
+impl TryFrom<&Token<'_>> for PrefixOp {
+    type Error = ();
+
+    fn try_from(value: &Token) -> Result<Self, Self::Error> {
+        match value {
+            Token::Plus => Ok(PrefixOp::Pos),
+            Token::Minus => Ok(PrefixOp::Neg),
+            _ => Err(()),
+        }
+    }
+}
+
 impl fmt::Display for PrefixOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let sym = match self {
@@ -203,5 +279,4 @@ impl fmt::Display for PrefixOp {
     }
 }
 
-pub const CALL_BP: u16 = 60;
 pub const MAX_BP: u16 = u16::MAX;

@@ -1,12 +1,22 @@
-prog = [ expr { ";" expr } ] ;
+prog = stmts ;
+stmts = [ stmt { ("\n" | "\r\n") stmt } ] ;
 
-expr  = sum     [ "=" expr ] ;
-sum   = prod    { ("+" | "-") prod  } ;
-prod  = unary   { ("*" | "/") unary } ;
-unary = ("+" | "-") unary | postfix [ "^" unary ] ;
+stmt =
+    expr "=" expr 
+  | fn_decl
+  | expr ;
 
-postfix = primary { "(" [ args ] ")" } ;
-args    = expr { "," expr } ;
+fn_decl = "fn" ident "(" args ")" ("{" stmts "}" | "=" expr)
+
+expr  = sum ;
+sum   = prod    { "+" prod  } ;
+prod  = unary   { "*" unary } ;
+unary = 
+    "-" unary 
+  | postfix [ "^" unary ] ;
+
+postfix = primary { "(" args ")" } ;
+args    = [ expr { "," expr } ] ;
 
 primary =
     number
