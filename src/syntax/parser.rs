@@ -7,9 +7,15 @@ use std::iter::Peekable;
 #[derive(Debug, Clone, PartialEq)]
 pub struct PErr<'src> {
     pub span: Span,
-    pub msg: String,
-    pub expected: Option<&'static str>,
+    pub expected: &'static str,
     pub got: Option<&'src str>,
+}
+
+impl Into<String> for PErr<'_> {
+    fn into(self) -> String {
+        let got = self.got.unwrap_or("EOI");
+        format!("expected {0}, got {got}", self.expected)
+    }
 }
 
 pub trait Parsable<'src>: Sized {
