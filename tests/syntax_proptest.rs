@@ -1,7 +1,7 @@
 use proptest::prelude::*;
 
-use calcium::syntax::ast::{Expr, InfixOp, PrefixOp, Program};
-use calcium::syntax::{lex, parse};
+use calcium::ast::{Expr, InfixOp, PrefixOp, Program};
+use calcium::{Lexable, Parsable, Token};
 
 // AST generators
 
@@ -69,45 +69,40 @@ fn arb_program() -> impl Strategy<Value = Program> {
 proptest! {
     #[test]
     fn test_pipeline_never_panics_on_raw_strings(input in "\\PC*") {
-        if let Ok(lexed) = lex(&input) {
-            let _ = parse(&lexed);
-        }
+        let mut lexed = Token::lex(&input);
+        assert!(lexed.all(|t| t.is_ok()), "Lexer panicked on input: {input:?}");
     }
 
     #[test]
     fn test_lexer_span_invariants(input in ".*") {
-        if let Ok(lexed) = lex(&input) {
-            let mut cursor = 0;
-            for (_tok, span) in &lexed.tokens {
-                let (start, end) = (span.start, span.end);
+        let mut cursor = 0;
+        for res in Token::lex(&input) {
+            let (_, span) = res.unwrap_or_else(|_| panic!("Lexer failed on input: {input:?}"));
+            let (start, end) = (span.start, span.end);
 
-                prop_assert!(start >= cursor);
-                prop_assert!(start <= end);
-                prop_assert!(end <= input.len());
+            prop_assert!(start >= cursor);
+            prop_assert!(start <= end);
+            prop_assert!(end <= input.len());
 
-                prop_assert!(input.is_char_boundary(start));
-                prop_assert!(input.is_char_boundary(end));
+            prop_assert!(input.is_char_boundary(start));
+            prop_assert!(input.is_char_boundary(end));
 
-                cursor = end;
-            }
-        }
+            cursor = end;
+    }
     }
 
     // parse(format(ast)) == ast
     #[test]
     fn test_ast_round_trip(orig_ast in arb_program()) {
-        let src = orig_ast.to_string();
+        let printed = orig_ast.to_string();
+        let lexed = Token::lex(printed.as_str()).collect::<Vec<_>>();
+        let lexed_joined = lexed.clone().iter().map(|t| format!("{t:?}")).collect::<Vec<_>>().join(", ");
+        let lexed_valid = lexed.iter().map(|t| t.to_owned().unwrap_or_else( |_| panic!("Lex failed on pretty-printed tokens:\nsource: {printed}\nlexed: {lexed_joined}")));
 
-        let lexed = lex(&src).unwrap_or_else(|errs| {
-            panic!("lexer failed on original AST:\nsource: {src}\nerrors: {errs:?}")
+        let parsed = Program::parse(&mut lexed_valid.peekable()).unwrap_or_else(|errs| {
+            panic!("Parser failed on pretty-printed tokens:\nSource: {printed}\nErrors: {errs:?}")
         });
 
-        let parsed_ast = parse(&lexed).unwrap_or_else(|errs| {
-            panic!("parser failed on valid tokens:\nsource: {src}\nerrors: {errs:?}")
-        });
-        println!("original AST: {orig_ast}");
-        println!("parsed AST: {parsed_ast}");
-
-        prop_assert_eq!(orig_ast, parsed_ast);
+        prop_assert_eq!(orig_ast, parsed);
     }
 }

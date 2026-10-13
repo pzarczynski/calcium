@@ -1,4 +1,4 @@
-pub mod syntax;
+mod syntax;
 
-pub use syntax::ast::*;
-pub use syntax::{lex, parse};
+pub use syntax::ast;
+pub use syntax::{Lexable, Parsable, Token};

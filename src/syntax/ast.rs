@@ -52,6 +52,21 @@ impl Expr {
         }
     }
 
+    pub fn infix(lhs: Expr, op: InfixOp, rhs: Expr) -> Self {
+        Expr::Infix {
+            op,
+            l: Box::new(lhs),
+            r: Box::new(rhs),
+        }
+    }
+
+    pub fn prefix(op: PrefixOp, expr: Expr) -> Self {
+        Expr::Prefix {
+            op,
+            expr: Box::new(expr),
+        }
+    }
+
     fn format(&self, f: &mut fmt::Formatter<'_>, parent_bp: u16) -> fmt::Result {
         let needs_parens = self.bp() < parent_bp;
         if needs_parens {
@@ -131,13 +146,13 @@ impl InfixOp {
             InfixOp::Assign => 10,
             InfixOp::Add | InfixOp::Sub => 20,
             InfixOp::Mul | InfixOp::Div => 30,
-            InfixOp::Pow => 50,
+            InfixOp::Pow => 40,
         }
     }
 
     pub fn assoc(self) -> Assoc {
         match self {
-            InfixOp::Assign | InfixOp::Pow => Assoc::Right,
+            InfixOp::Pow | InfixOp::Assign => Assoc::Right,
             InfixOp::Add | InfixOp::Sub | InfixOp::Mul | InfixOp::Div => Assoc::Left,
         }
     }
@@ -154,12 +169,12 @@ impl InfixOp {
 impl fmt::Display for InfixOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let sym = match self {
-            InfixOp::Assign => "=",
             InfixOp::Add => "+",
             InfixOp::Sub => "-",
             InfixOp::Mul => "*",
             InfixOp::Div => "/",
             InfixOp::Pow => "^",
+            InfixOp::Assign => "=",
         };
         write!(f, "{sym}")
     }

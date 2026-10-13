@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a6421614cc8a6e4ea953e58869033fd2b4267169465b691776e341bc10f23baf # shrinks to ast = Program { exprs: [Prefix { op: Pos, expr: Num("0") }] }

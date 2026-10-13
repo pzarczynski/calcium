@@ -1,15 +1,8 @@
 use logos::Logos;
 use std::{fmt, ops::Range};
-use thiserror::Error;
 
 pub type Span = Range<usize>;
 pub type Spanned<T> = (T, Span);
-
-#[derive(Debug, Clone, PartialEq, Error)]
-pub enum LErr {
-    #[error("invalid token '{token}' at {span}")]
-    InvalidToken { token: String, span: Span },
-}
 
 pub trait Lexable<'src>: Sized {
     type Source: ?Sized + 'src;

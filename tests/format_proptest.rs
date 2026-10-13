@@ -1,7 +1,7 @@
 use proptest::prelude::*;
 
-use calcium::syntax::ast::{Expr, InfixOp, PrefixOp, Program};
-use calcium::syntax::{lex, parse};
+use calcium::ast::{Expr, InfixOp, PrefixOp, Program};
+use calcium::{Lexable, Parsable, Token};
 
 // AST generators
 
@@ -56,32 +56,22 @@ fn arb_program() -> impl Strategy<Value = Program> {
 // proptests
 
 proptest! {
-    #[test]
-    // parse(format(ast)) == ast
-    fn test_pretty_printed_ast_roundtrips(ast in arb_program()) {
-        let printed = ast.to_string();
-
-        let lexed = lex(&printed).unwrap_or_else(|errs| {
-            panic!("Lexer rejected pretty-printed AST:\nSource: {printed}\nErrors: {errs:?}")
-        });
-
-        let parsed = parse(&lexed).unwrap_or_else(|errs| {
-            panic!("Parser failed on pretty-printed tokens:\nSource: {printed}\nErrors: {errs:?}")
-        });
-
-        prop_assert_eq!(ast, parsed);
-    }
-
     // format(parse(format(ast))) == format(ast)
     #[test]
     fn test_pretty_printing_is_idempotent(ast in arb_program()) {
-        let printed_once = ast.to_string();
+        let printed = ast.to_string();
 
-        let lexed = lex(&printed_once).expect("Lex failed");
-        let parsed = parse(&lexed).expect("Parse failed");
+        let lexed = Token::lex(printed.as_str()).collect::<Vec<_>>();
+        let lexed_joined = lexed.clone().iter().map(|t| format!("{t:?}")).collect::<Vec<_>>().join(", ");
+        let lexed_valid = lexed
+            .iter().map(|t| t.to_owned().unwrap_or_else( |_| panic!("Lex failed on pretty-printed tokens:\nsource: {printed}\nlexed: {lexed_joined}")));
+
+        let parsed = Program::parse(&mut lexed_valid.peekable()).unwrap_or_else(|errs| {
+            panic!("Parser failed on pretty-printed tokens:\nSource: {printed}\nErrors: {errs:?}")
+        });
 
         let printed_twice = parsed.to_string();
 
-        prop_assert_eq!(printed_once, printed_twice);
+        prop_assert_eq!(printed, printed_twice);
     }
 }

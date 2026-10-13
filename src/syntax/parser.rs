@@ -13,25 +13,25 @@ pub struct PErr<'src> {
 }
 
 pub trait Parsable<'src>: Sized {
-    fn parse<I>(src: &mut Peekable<I>) -> Result<Self, Vec<PErr<'src>>>
+    fn parse<I>(s: &mut Peekable<I>) -> Result<Self, Vec<PErr<'src>>>
     where
         I: Iterator<Item = Spanned<Token<'src>>>;
 }
 
 impl<'src> Parsable<'src> for Program {
-    fn parse<I>(src: &mut Peekable<I>) -> Result<Self, Vec<PErr<'src>>>
+    fn parse<I>(s: &mut Peekable<I>) -> Result<Self, Vec<PErr<'src>>>
     where
         I: Iterator<Item = Spanned<Token<'src>>>,
     {
         let mut exprs = Vec::new();
         let mut errors = Vec::new();
 
-        while let Some((tok, span)) = src.peek() {
+        while let Some((tok, _)) = s.peek() {
             match tok {
                 Token::Sep => {
-                    src.next();
+                    s.next();
                 }
-                _ => match Expr::parse(src) {
+                _ => match Expr::parse(s) {
                     Ok(expr) => exprs.push(expr),
                     Err(mut errs) => errors.append(&mut errs),
                 },
@@ -46,115 +46,200 @@ impl<'src> Parsable<'src> for Program {
     }
 }
 
-fn prefix_assoc(op: PrefixOp) -> u16 {
-    op.prec()
-}
+impl<'src> Parsable<'src> for Expr {
+    fn parse<I>(s: &mut Peekable<I>) -> Result<Self, Vec<PErr<'src>>>
+    where
+        I: Iterator<Item = Spanned<Token<'src>>>,
+    {
+        let mut errors = Vec::new();
 
-fn infix_assoc(op: InfixOp) -> chumsky::pratt::Associativity {
-    let p = op.prec();
-    match op.assoc() {
-        Assoc::Left => chumsky::pratt::left(p),
-        Assoc::Right => chumsky::pratt::right(p),
+        match s.peek() {
+            Some((Token::Ident(_), _)) | Some((Token::Num(_), _)) | Some((Token::LParen, _)) => {
+                match Expr::pratt(s, 0) {
+                    Ok(expr) => Ok(expr),
+                    Err(mut errs) => {
+                        errors.append(&mut errs);
+                        Err(errors)
+                    }
+                }
+            }
+            Some((tok, span)) => {
+                errors.push(PErr {
+                    span: span.clone(),
+                    msg: format!("Unexpected token: {tok:?}"),
+                    expected: Some("expression"),
+                    got: None,
+                });
+                s.next();
+                Err(errors)
+            }
+            None => {
+                errors.push(PErr {
+                    span: Span::from(0..0),
+                    msg: "Unexpected end of input".to_string(),
+                    expected: Some("expression"),
+                    got: None,
+                });
+                s.next();
+                Err(errors)
+            }
+        }
     }
 }
 
-fn prefix_expr(op: PrefixOp, expr: Expr) -> Expr {
-    Expr::Prefix {
-        op,
-        expr: Box::new(expr),
+fn as_prefix_op(tok: &Token) -> Option<PrefixOp> {
+    match tok {
+        Token::Plus => Some(PrefixOp::Pos),
+        Token::Minus => Some(PrefixOp::Neg),
+        _ => None,
     }
 }
 
-fn infix_expr(l: Expr, op: InfixOp, r: Expr) -> Expr {
-    Expr::Infix {
-        l: Box::new(l),
-        op,
-        r: Box::new(r),
+fn as_infix_op(tok: &Token) -> Option<InfixOp> {
+    match tok {
+        Token::Plus => Some(InfixOp::Add),
+        Token::Minus => Some(InfixOp::Sub),
+        Token::Star => Some(InfixOp::Mul),
+        Token::Slash => Some(InfixOp::Div),
+        Token::Sup => Some(InfixOp::Pow),
+        Token::Eq => Some(InfixOp::Assign),
+        _ => None,
     }
 }
 
-fn call_expr(fun: Expr, args: Vec<Expr>) -> Expr {
-    Expr::Call {
-        fun: Box::new(fun),
-        args,
+impl<'src> Expr {
+    fn parse_call_args<I>(s: &mut Peekable<I>) -> Result<Vec<Self>, Vec<PErr<'src>>>
+    where
+        I: Iterator<Item = Spanned<Token<'src>>>,
+    {
+        let mut args = Vec::new();
+
+        if let Some((Token::RParen, _)) = s.peek() {
+            s.next();
+            return Ok(args);
+        }
+
+        loop {
+            args.push(Expr::pratt(s, 0)?);
+
+            match s.next() {
+                Some((Token::Comma, _)) => {
+                    if let Some((Token::RParen, _)) = s.peek() {
+                        s.next();
+                        break;
+                    }
+                }
+                Some((Token::RParen, _)) => break,
+                Some((other, span)) => {
+                    return Err(vec![PErr {
+                        span,
+                        msg: format!("Expected ',' or ')', found {other:?}"),
+                        expected: Some("',' or ')'"),
+                        got: None,
+                    }]);
+                }
+                None => {
+                    return Err(vec![PErr {
+                        span: 0..0,
+                        msg: "Unclosed function arguments; reached EOF".to_string(),
+                        expected: Some("')'"),
+                        got: None,
+                    }]);
+                }
+            }
+        }
+
+        Ok(args)
     }
-}
 
-pub fn parser<'src, I>() -> impl Parser<'src, I, Program, PExtra<'src>> + Clone
-where
-    I: ValueInput<'src, Token = Token, Span = Span>,
-{
-    let expr = recursive::<_, Expr, PExtra<'src>, _, _>(|expr| {
-        let ident = select! {
-            Token::Ident(name) => Expr::Ident(name),
+    pub fn pratt<I>(s: &mut Peekable<I>, min_bp: u16) -> Result<Self, Vec<PErr<'src>>>
+    where
+        I: Iterator<Item = Spanned<Token<'src>>>,
+    {
+        let (tok, span) = match s.next() {
+            Some(pair) => pair,
+            None => {
+                return Err(vec![PErr {
+                    span: 0..0,
+                    msg: "Unexpected end of input".to_string(),
+                    expected: Some("expression"),
+                    got: None,
+                }]);
+            }
         };
 
-        let number = select! {
-            Token::Num(v) => Expr::Num(v),
+        let mut lhs = match tok {
+            Token::Num(n) => Expr::Num(n.to_string()),
+            Token::Ident(name) => Expr::Ident(name.to_string()),
+            Token::LParen => {
+                let inner = Expr::pratt(s, 0)?;
+                match s.next() {
+                    Some((Token::RParen, _)) => inner,
+                    Some((other, err_span)) => {
+                        return Err(vec![PErr {
+                            span: err_span,
+                            msg: format!("Expected ')', found {other:?}"),
+                            expected: Some("')'"),
+                            got: None,
+                        }]);
+                    }
+                    None => {
+                        return Err(vec![PErr {
+                            span,
+                            msg: "Unclosed '('; reached end of input".to_string(),
+                            expected: Some("')'"),
+                            got: None,
+                        }]);
+                    }
+                }
+            }
+
+            tok if as_prefix_op(&tok).is_some() => {
+                let op = as_prefix_op(&tok).unwrap();
+                let (_, r_bp) = op.bp();
+                let rhs = Expr::pratt(s, r_bp)?;
+                Expr::prefix(op, rhs)
+            }
+
+            _ => {
+                return Err(vec![PErr {
+                    span,
+                    msg: format!("Expected expression, found {tok:?}"),
+                    expected: Some("expression"),
+                    got: None,
+                }]);
+            }
         };
+        while let Some((peeked_tok, _)) = s.peek() {
+            if *peeked_tok == Token::LParen {
+                if CALL_BP < min_bp {
+                    break;
+                }
 
-        let grouped = expr
-            .clone()
-            .delimited_by(just(Token::LParen), just(Token::RParen));
+                s.next();
+                let args = Self::parse_call_args(s)?;
+                lhs = Expr::Call {
+                    fun: Box::new(lhs),
+                    args,
+                };
+                continue;
+            }
 
-        let primary = choice((number, ident, grouped));
+            if let Some(op) = as_infix_op(peeked_tok) {
+                let (l_bp, r_bp) = op.bp();
+                if l_bp < min_bp {
+                    break;
+                }
 
-        let call = expr
-            .clone()
-            .separated_by(just(Token::Comma))
-            .collect::<Vec<_>>()
-            .delimited_by(just(Token::LParen), just(Token::RParen));
+                s.next();
+                let rhs = Expr::pratt(s, r_bp)?;
+                lhs = Expr::infix(lhs, op, rhs);
+                continue;
+            }
 
-        let pow_op = select! {
-            Token::Sup => InfixOp::Pow
-        };
+            break;
+        }
 
-        let unary_op = select! {
-            Token::Plus  => PrefixOp::Pos,
-            Token::Minus => PrefixOp::Neg,
-        };
-
-        let mul_op = select! {
-            Token::Star  => InfixOp::Mul,
-            Token::Slash => InfixOp::Div,
-        };
-
-        let sum_op = select! {
-            Token::Plus  => InfixOp::Add,
-            Token::Minus => InfixOp::Sub,
-        };
-
-        let assign_op = select! {
-            Token::Eq => InfixOp::Assign
-        };
-
-        primary
-            .pratt((
-                infix(infix_assoc(InfixOp::Assign), assign_op, |l, op, r, _| {
-                    infix_expr(l, op, r)
-                }),
-                infix(infix_assoc(InfixOp::Add), sum_op, |l, op, r, _| {
-                    infix_expr(l, op, r)
-                }),
-                infix(infix_assoc(InfixOp::Mul), mul_op, |l, op, r, _| {
-                    infix_expr(l, op, r)
-                }),
-                prefix(prefix_assoc(PrefixOp::Pos), unary_op, |op, expr, _| {
-                    prefix_expr(op, expr)
-                }),
-                infix(infix_assoc(InfixOp::Pow), pow_op, |l, op, r, _| {
-                    infix_expr(l, op, r)
-                }),
-                postfix(CALL_BP, call, |fun, args, _| call_expr(fun, args)),
-            ))
-            .boxed()
-    });
-
-    let sep = just(Token::Sep).repeated().at_least(1).ignored();
-
-    sep.clone()
-        .or_not()
-        .ignore_then(expr.separated_by(sep).allow_trailing().collect::<Vec<_>>())
-        .map(|exprs| Program { exprs })
-        .then_ignore(end())
+        Ok(lhs)
+    }
 }
