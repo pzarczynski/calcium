@@ -48,21 +48,16 @@ impl fmt::Display for PErr<'_> {
     }
 }
 
-trait Eater<E>
-where
-    E: std::error::Error,
-{
-    fn eat(&mut self) -> Result<(), E>;
+trait Eater {
+    fn eat(&mut self) -> Option<()>;
 }
 
-impl<E, I, T> Eater<E> for Peekable<I>
+impl<I, T> Eater for Peekable<I>
 where
-    E: std::error::Error,
-    I: Iterator<Item = Result<T, E>>,
+    I: Iterator<Item = T>,
 {
-    fn eat(&mut self) -> Result<(), E> {
-        self.next().ok_or(Err(()))?;
-        Ok(())
+    fn eat(&mut self) -> Option<()> {
+        self.next().map(|_| ())
     }
 }
 
@@ -70,7 +65,7 @@ pub struct Parser;
 
 impl Parser {
     pub fn parse<'src>(
-        src: &mut impl Iterator<Item = Spanned<Token<'src>>>,
+        src: impl Iterator<Item = Spanned<Token<'src>>>,
     ) -> Result<Program, Vec<PErr<'src>>> {
         let mut toks = src.peekable();
         let mut stmts = Vec::new();
@@ -245,7 +240,7 @@ impl Parser {
     }
 
     fn parse_expr<'src, I>(
-        toks: Peekable<impl Iterator<Item = Spanned<Token<'src>>>>,
+        toks: &mut Peekable<impl Iterator<Item = Spanned<Token<'src>>>>,
     ) -> Result<Expr, PErr<'src>> {
         match toks.peek() {
             Some((Token::Ident(_), _)) | Some((Token::Num(_), _)) | Some((Token::LParen, _)) => {

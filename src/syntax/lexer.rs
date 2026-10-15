@@ -18,22 +18,22 @@ impl<T: Into<usize>> From<Range<T>> for Span {
 
 pub type Spanned<T> = (T, Span);
 
-pub trait Lexable<'src>: Sized {
-    type Source: ?Sized + 'src;
-    fn lex(src: &'src Self::Source) -> impl Iterator<Item = Result<Spanned<Self>, Span>> + 'src;
+pub trait Lexable<'src>: Logos<'src> + Sized + 'src
+where
+    Self::Extras: Default,
+{
+    fn lex(src: &'src Self::Source) -> impl Iterator<Item = Spanned<Self>>;
 }
 
-impl<'src, T> Lexable<'src> for T
-where
-    T: Logos<'src> + 'src,
-    T::Extras: Default,
-{
-    type Source = T::Source;
-
-    fn lex(src: &'src Self::Source) -> impl Iterator<Item = Result<Spanned<Self>, Span>> + 'src {
-        T::lexer(src)
-            .spanned()
-            .map(move |(res, span)| res.map(|tok| (tok, span.clone())).map_err(|_| span))
+impl<'src> Lexable<'src> for Token<'src> {
+    fn lex(src: &'src Self::Source) -> impl Iterator<Item = Spanned<Self>> {
+        Self::lexer(src).spanned().map(|(tok, r)| {
+            let span: Span = r.into();
+            match tok {
+                Ok(tok) => (tok, span),
+                Err(_) => (Self::Invalid, span),
+            }
+        })
     }
 }
 
@@ -84,6 +84,8 @@ pub enum Token<'src> {
 
     #[regex("[A-Za-z_][a-zA-Z0-9_]*", |lex| lex.slice())]
     Ident(&'src str),
+
+    Invalid,
 }
 
 impl fmt::Display for Token<'_> {
@@ -104,6 +106,7 @@ impl fmt::Display for Token<'_> {
             Token::RBrack => write!(f, "}}"),
             Token::Num(n) => write!(f, "{n}"),
             Token::Ident(id) => write!(f, "{id}"),
+            Token::Invalid => write!(f, "<invalid>"),
         }
     }
 }
