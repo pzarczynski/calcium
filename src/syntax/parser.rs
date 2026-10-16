@@ -1,14 +1,31 @@
-use super::ast::*;
-use super::lexer::{Span, Spanned, Token};
-use std::fmt;
+use crate::syntax::ast::*;
+use crate::syntax::lexer::{Span, Spanned, Token};
 use std::iter::Peekable;
 
 #[derive(Debug, Clone, PartialEq)]
-enum Expected<'src> {
+pub enum Expected<'src> {
     Token(Token<'src>),
+    Ident,
     Expr,
     Stmt,
-    Stmts,
+}
+
+impl<'src> From<Token<'src>> for Expected<'src> {
+    fn from(t: Token<'src>) -> Self {
+        Self::Token(t)
+    }
+}
+
+impl<'src> From<Token<'src>> for Vec<Expected<'src>> {
+    fn from(t: Token<'src>) -> Self {
+        vec![t.into()]
+    }
+}
+
+impl<'src> From<Expected<'src>> for Vec<Expected<'src>> {
+    fn from(e: Expected<'src>) -> Self {
+        vec![e]
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -18,66 +35,34 @@ pub struct PErr<'src> {
     pub got: Option<Token<'src>>,
 }
 
-impl fmt::Display for PErr<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let expected_str = self
-            .expected
-            .iter()
-            .map(|e| match e {
-                Expected::Token(tok) => format!("token '{}'", tok),
-                Expected::Expr => "expression".to_string(),
-                Expected::Stmt => "statement".to_string(),
-                Expected::Stmts => "statements".to_string(),
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
+pub type PResult<'src, T> = Result<T, PErr<'src>>;
 
-        let got_str = match &self.got {
-            Some(tok) => format!("token '{}'", tok),
-            None => "end of input".to_string(),
-        };
-
-        match &self.span {
-            Some(span) => write!(
-                f,
-                "Parse error at {}..{}: expected {}, got {}",
-                span.start, span.end, expected_str, got_str
-            ),
-            None => write!(f, "Parse error: expected {}, got {}", expected_str, got_str),
-        }
-    }
+pub struct Parser<I: Iterator> {
+    toks: Peekable<I>,
 }
 
-trait Eater {
-    fn eat(&mut self) -> Option<()>;
-}
-
-impl<I, T> Eater for Peekable<I>
+impl<'src, I> Parser<I>
 where
-    I: Iterator<Item = T>,
+    I: Iterator<Item = Spanned<Token<'src>>>,
 {
-    fn eat(&mut self) -> Option<()> {
-        self.next().map(|_| ())
-    }
-}
-
-pub struct Parser;
-
-impl Parser {
-    pub fn parse<'src>(
-        src: impl Iterator<Item = Spanned<Token<'src>>>,
-    ) -> Result<Program, Vec<PErr<'src>>> {
-        let mut toks = src.peekable();
+    pub fn parse(src: I) -> Result<Program, Vec<PErr<'src>>> {
+        let mut parser = Self {
+            toks: src.peekable(),
+        };
         let mut stmts = Vec::new();
         let mut errors = Vec::new();
 
-        while let Some((tok, span)) = toks.next()
-            && tok != Token::Sep
-        {
-            match Parser::parse_stmt(&mut toks) {
+        parser.eat_while_eq(&Token::Sep);
+
+        while parser.toks.peek().is_some() {
+            match parser.parse_stmt() {
                 Ok(stmt) => stmts.push(stmt),
-                Err(err) => errors.push(err),
+                Err(err) => {
+                    errors.push(err);
+                    parser.sync();
+                }
             }
+            parser.eat_while_eq(&Token::Sep);
         }
 
         errors
@@ -86,289 +71,166 @@ impl Parser {
             .ok_or(errors)
     }
 
-    fn parse_stmt<'src>(
-        toks: &mut Peekable<impl Iterator<Item = Spanned<Token<'src>>>>,
-    ) -> Result<Stmt, PErr<'src>> {
-        let mut errors = Vec::new();
+    // combinator helpers
 
-        match toks.peek() {
-            Some((Token::Fn, _)) => Parser::parse_fn(toks),
-            Some((Token::Return, _)) => {
-                toks.next();
-                let expr = Parser::parse_expr(toks)?;
-                Ok(Stmt::Return(expr))
-            }
-            Some((Token::Ident(_), _)) => {
-                let lhs = Parser::parse_expr(toks)?;
-                match toks.peek() {
-                    Some((Token::Eq, _)) => {
-                        toks.next();
-                        let rhs = Parser::parse_expr(toks)?;
-                        Ok(Stmt::Assign { lhs, rhs })
-                    }
-                    _ => Ok(Stmt::Expr(lhs)),
-                }
-            }
-            Some((tok, span)) => Err(PErr {
-                span: Some(span.clone()),
-                expected: vec![Expected::Token(*tok), Expected::Expr],
-                got: Some(*tok),
-            }),
-            None => Err(PErr {
+    fn err_here(&mut self, expected: impl Into<Vec<Expected<'src>>>) -> PErr<'src> {
+        match self.toks.peek().cloned() {
+            Some((got, span)) => PErr {
+                span: Some(span),
+                expected: expected.into(),
+                got: Some(got),
+            },
+            None => PErr {
                 span: None,
-                expected: vec![Expected::Stmt],
+                expected: expected.into(),
                 got: None,
-            }),
+            },
         }
     }
 
-    fn parse_fn<'src>(
-        toks: &mut Peekable<impl Iterator<Item = Spanned<Token<'src>>>>,
-    ) -> Result<Stmt, PErr<'src>> {
-        let name = match toks.next() {
+    fn eat_if(&mut self, pred: impl FnOnce(&Token<'src>) -> bool) -> Option<Spanned<Token<'src>>> {
+        self.toks.next_if(|(t, _)| pred(t))
+    }
+
+    fn eat_if_eq(&mut self, expected: &Token<'src>) -> Option<Span> {
+        self.eat_if(|t| t == expected).map(|(_, span)| span)
+    }
+
+    fn eat_while_eq(&mut self, expected: &Token<'src>) -> () {
+        std::iter::from_fn(|| self.eat_if_eq(expected)).for_each(drop)
+    }
+
+    fn expect(&mut self, expected: Token<'src>) -> PResult<'src, Span> {
+        match self.eat_if_eq(&expected) {
+            Some(span) => Ok(span),
+            None => Err(self.err_here(expected)),
+        }
+    }
+
+    fn expect_ident(&mut self) -> PResult<'src, String> {
+        match self.eat_if(|t| matches!(t, Token::Ident(_))) {
             Some((Token::Ident(name), _)) => Ok(name.to_string()),
-            Some((tok, span)) => Err(PErr {
-                span: Some(span),
-                expected: vec![Expected::Token(tok)],
-                got: Some(tok),
-            }),
-            None => Err(PErr {
-                span: None,
-                expected: vec![Expected::Token(Token::Ident("<function name>"))],
-                got: None,
-            }),
-        }?;
+            _ => Err(self.err_here(Expected::Ident)),
+        }
+    }
+
+    /// parses a sequence up to `close` (consuming `close`).
+    fn parse_until<T>(
+        &mut self,
+        close: Token<'src>,
+        mut f: impl FnMut(&mut Self) -> PResult<'src, T>,
+    ) -> PResult<'src, Vec<T>> {
+        let mut items = Vec::new();
+        while self.eat_if_eq(&close).is_none() {
+            if self.toks.peek().is_none() {
+                return Err(self.err_here(close));
+            }
+            items.push(f(self)?);
+        }
+        Ok(items)
+    }
+
+    /// parses a delimiter-separated sequence up to `close` (supporting trailing delimiters).
+    fn parse_delimited<T>(
+        &mut self,
+        sep: Token<'src>,
+        close: Token<'src>,
+        mut f: impl FnMut(&mut Self) -> PResult<'src, T>,
+    ) -> PResult<'src, Vec<T>> {
+        let mut items = Vec::new();
+        while self.eat_if_eq(&close).is_none() {
+            items.push(f(self)?);
+            if self.eat_if_eq(&sep).is_none() {
+                if self.eat_if_eq(&close).is_none() {
+                    return Err(self.err_here(vec![Expected::Token(sep), Expected::Token(close)]));
+                }
+                break;
+            }
+        }
+        Ok(items)
+    }
+
+    fn sync(&mut self) {
+        while let Some((tok, _)) = self.toks.peek() {
+            if matches!(tok, Token::Sep | Token::Fn | Token::Return | Token::RBrack) {
+                break;
+            }
+            self.toks.next();
+        }
+    }
+
+    // grammar rules
+
+    fn parse_stmt(&mut self) -> PResult<'src, Stmt> {
+        if self.eat_if_eq(&Token::Fn).is_some() {
+            return self.parse_fn();
+        }
+        if self.eat_if_eq(&Token::Return).is_some() {
+            return Ok(Stmt::Return(self.parse_expr()?));
+        }
+        if self.toks.peek().is_none() {
+            return Err(self.err_here(vec![Expected::Stmt]));
+        }
+
+        let lhs = self.parse_expr()?;
+        if self.eat_if_eq(&Token::Eq).is_some() {
+            let rhs = self.parse_expr()?;
+            Ok(Stmt::Assign { lhs, rhs })
+        } else {
+            Ok(Stmt::Expr(lhs))
+        }
+    }
+
+    fn parse_fn(&mut self) -> PResult<'src, Stmt> {
+        let name = self.expect_ident()?;
+        self.expect(Token::LParen)?;
+        let args = self.parse_delimited(Token::Comma, Token::RParen, Self::expect_ident)?;
+        self.expect(Token::LBrack)?;
+        let body = self.parse_until(Token::RBrack, Self::parse_stmt)?;
 
         Ok(Stmt::FnDef {
             name,
-            args: Parser::parse_fn_args(toks)?,
-            body: Box::new(Parser::parse_fn_body(toks)?),
+            args,
+            body: Box::new(Stmts::from(body)),
         })
     }
 
-    fn parse_fn_args<'src>(
-        toks: &mut Peekable<impl Iterator<Item = Spanned<Token<'src>>>>,
-    ) -> Result<Vec<String>, PErr<'src>> {
-        let mut args = Vec::new();
-
-        match toks.next() {
-            Some((Token::LParen, _)) => Ok(()),
-            Some((tok, span)) => Err(PErr {
-                span: Some(span),
-                expected: vec![Expected::Token(Token::LParen)],
-                got: Some(tok),
-            }),
-            None => Err(PErr {
-                span: None,
-                expected: vec![Expected::Token(Token::LParen)],
-                got: None,
-            }),
-        }?;
-
-        loop {
-            match toks.next() {
-                Some((Token::Ident(arg), _)) => Ok(args.push(arg.to_string())),
-                Some((Token::RParen, _)) => break,
-                Some((tok, span)) => Err(PErr {
-                    span: Some(span),
-                    expected: vec![
-                        Expected::Token(Token::Ident("<argument>")),
-                        Expected::Token(Token::RParen),
-                    ],
-                    got: Some(tok),
-                }),
-                None => Err(PErr {
-                    span: None,
-                    expected: vec![
-                        Expected::Token(Token::Ident("<argument>")),
-                        Expected::Token(Token::RParen),
-                    ],
-                    got: None,
-                }),
-            }?;
-
-            match toks.peek() {
-                Some((Token::Comma, _)) => Ok(toks.eat()),
-                Some((Token::RParen, _)) => Ok(()),
-                Some((tok, span)) => Err(PErr {
-                    span: Some(span.clone()),
-                    expected: vec![
-                        Expected::Token(Token::Comma),
-                        Expected::Token(Token::RParen),
-                    ],
-                    got: None,
-                }),
-                None => Err(PErr {
-                    span: None,
-                    expected: vec![
-                        Expected::Token(Token::Comma),
-                        Expected::Token(Token::RParen),
-                    ],
-                    got: None,
-                }),
-            }?
-        }
-
-        Ok(args)
+    fn parse_expr(&mut self) -> PResult<'src, Expr> {
+        self.pratt(0)
     }
 
-    fn parse_fn_body<'src>(
-        toks: &mut Peekable<impl Iterator<Item = Spanned<Token<'src>>>>,
-    ) -> Result<Stmts, PErr<'src>> {
-        let mut stmts = Vec::new();
-
-        match toks.next() {
-            Some((Token::LBrack, _)) => Ok(()),
-            Some((tok, span)) => Err(PErr {
-                span: Some(span),
-                expected: vec![Expected::Token(Token::LBrack)],
-                got: Some(tok),
-            }),
-            None => Err(PErr {
-                span: None,
-                expected: vec![Expected::Token(Token::LBrack)],
-                got: None,
-            }),
-        }?;
-
-        stmts.extend(
-            toks.take_while(|(tok, _)| *tok != Token::RBrack)
-                .map(|(tok, _)| Parser::parse_stmt(toks)?),
-        );
-
-        Ok(Stmts::from(stmts))
-    }
-
-    fn parse_expr<'src, I>(
-        toks: &mut Peekable<impl Iterator<Item = Spanned<Token<'src>>>>,
-    ) -> Result<Expr, PErr<'src>> {
-        match toks.peek() {
-            Some((Token::Ident(_), _)) | Some((Token::Num(_), _)) | Some((Token::LParen, _)) => {
-                Expr::pratt(toks, 0)?
-            }
-            Some((tok, span)) => {
-                errors.push(PErr {
-                    span: span.clone(),
-                    expected: "expression",
-                    got: Some(tok.to_string()),
-                });
-                toks.next();
-                Err(errors)
-            }
-            None => {
-                errors.push(PErr {
-                    span: Span::from(0..0),
-                    expected: "expression",
-                    got: None,
-                });
-                toks.next();
-                Err(errors)
-            }
-        }
-    }
-}
-
-impl<'src> Expr {
-    fn parse_call_args<I>(toks: &mut Peekable<I>) -> Result<Vec<Self>, Vec<PErr>>
-    where
-        I: Iterator<Item = Spanned<Token<'src>>>,
-    {
-        let mut args = Vec::new();
-
-        if let Some((Token::RParen, _)) = toks.peek() {
-            toks.next();
-            return Ok(args);
-        }
-
-        loop {
-            args.push(Expr::pratt(toks, 0)?);
-
-            match toks.next() {
-                Some((Token::Comma, _)) => {
-                    if let Some((Token::RParen, _)) = toks.peek() {
-                        toks.next();
-                        break;
-                    }
-                }
-                Some((Token::RParen, _)) => break,
-                Some((other, span)) => {
-                    return Err(vec![PErr {
-                        span,
-                        expected: "',' or ')'",
-                        got: Some(other.to_string()),
-                    }]);
-                }
-                None => {
-                    return Err(vec![PErr {
-                        span: 0..0,
-                        expected: "')'",
-                        got: None,
-                    }]);
-                }
-            }
-        }
-
-        Ok(args)
-    }
-
-    pub fn pratt<I>(toks: &mut Peekable<I>, min_bp: u16) -> Result<Self, Vec<PErr>>
-    where
-        I: Iterator<Item = Spanned<Token<'src>>>,
-    {
-        let (tok, span) = match toks.next() {
-            Some(pair) => pair,
-            None => {
-                return Err(vec![PErr {
-                    span: 0..0,
-                    expected: "expression",
-                    got: None,
-                }]);
-            }
-        };
+    fn pratt(&mut self, min_bp: u16) -> PResult<'src, Expr> {
+        let (tok, span) = self
+            .toks
+            .next()
+            .ok_or_else(|| self.err_here(vec![Expected::Expr]))?;
 
         let mut lhs = match tok {
             Token::Num(n) => Expr::Num(n.to_string()),
             Token::Ident(name) => Expr::Ident(name.to_string()),
             Token::LParen => {
-                let inner = Expr::pratt(toks, 0)?;
-                match toks.next() {
-                    Some((Token::RParen, _)) => inner,
-                    Some((other, err_span)) => {
-                        return Err(vec![PErr {
-                            span: err_span,
-                            expected: "')'",
-                            got: None,
-                        }]);
-                    }
-                    None => {
-                        return Err(vec![PErr {
-                            span,
-                            expected: "')'",
-                            got: None,
-                        }]);
-                    }
-                }
+                let inner = self.pratt(0)?;
+                self.expect(Token::RParen)?;
+                inner
             }
-
-            tok if as_prefix_op(&tok).is_some() => {
-                let op = as_prefix_op(&tok).unwrap();
+            _ if let Ok(op) = PrefixOp::try_from(&tok) => {
                 let (_, r_bp) = op.bp();
-                let rhs = Expr::pratt(toks, r_bp)?;
+                let rhs = self.pratt(r_bp)?;
                 Expr::prefix(op, rhs)
             }
-
-            _ => {
-                return Err(vec![PErr {
-                    span,
-                    expected: "expression",
-                    got: None,
-                }]);
+            other => {
+                return Err(PErr {
+                    span: Some(span),
+                    expected: vec![Expected::Expr],
+                    got: Some(other),
+                });
             }
         };
-        while let Some((peeked_tok, _)) = toks.peek() {
+
+        while let Some((peeked_tok, _)) = self.toks.peek() {
             if *peeked_tok == Token::LParen {
-                toks.next();
-                let args = Self::parse_call_args(toks)?;
+                self.toks.next();
+                let args = self.parse_delimited(Token::Comma, Token::RParen, Self::parse_expr)?;
                 lhs = Expr::Call {
                     fun: Box::new(lhs),
                     args,
@@ -376,14 +238,13 @@ impl<'src> Expr {
                 continue;
             }
 
-            if let Some(op) = as_infix_op(peeked_tok) {
+            if let Ok(op) = InfixOp::try_from(peeked_tok) {
                 let (l_bp, r_bp) = op.bp();
                 if l_bp < min_bp {
                     break;
                 }
-
-                toks.next();
-                let rhs = Expr::pratt(toks, r_bp)?;
+                self.toks.next();
+                let rhs = self.pratt(r_bp)?;
                 lhs = Expr::infix(lhs, op, rhs);
                 continue;
             }
