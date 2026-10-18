@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc ac8bb300ce626784e081f46d0ca5862be53b2c30dee1f837e554d2c5716333a9 # shrinks to original_ast = Program { exprs: [Call { fun: Prefix { op: Pos, expr: Num("0") }, args: [] }] }
+cc 08043416964dd2c610321732bab8d62d43a26abbd11ce74c1fcf74389ed0ca36 # shrinks to orig_ast = Program { exprs: [Infix { op: Pow, l: Prefix { op: Pos, expr: Num("0") }, r: Num("0") }] }
