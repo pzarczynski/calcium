@@ -16,25 +16,6 @@ impl<'src> From<Token<'src>> for Expected<'src> {
     }
 }
 
-trait TokenMatcher<'src>: Copy {
-    fn matches(self, tok: Token<'src>) -> bool;
-}
-
-impl TokenMatcher<'_> for Token<'_> {
-    fn matches(self, tok: Token) -> bool {
-        self == tok
-    }
-}
-
-impl<'src, F> TokenMatcher<'src> for F
-where
-    F: FnOnce(Token<'src>) -> bool + Copy,
-{
-    fn matches(self, tok: Token<'src>) -> bool {
-        self(tok)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct PErr<'src> {
     pub span: Option<Span>,
@@ -84,6 +65,126 @@ where
         }
     }
 
+    // grammar rules
+
+    fn stmt(&mut self) -> PResult<'src, Stmt<'src>> {
+        if self.at_eoi() {
+            return Err(self.err_here(vec![Expected::Stmt]));
+        }
+
+        if self.eat(Token::Fn) {
+            return self.function();
+        }
+
+        let stmt = if self.eat(Token::Return) {
+            Stmt::Return(self.expr()?)
+        } else {
+            let lhs = self.expr()?;
+            if self.eat(Token::Eq) {
+                let rhs = self.expr()?;
+                Stmt::Assign { lhs, rhs }
+            } else {
+                Stmt::Expr(lhs)
+            }
+        };
+
+        self.expect(Token::Sep)?;
+        Ok(stmt)
+    }
+
+    fn function(&mut self) -> PResult<'src, Stmt<'src>> {
+        let name = self.ident()?;
+        self.expect(Token::LParen)?;
+        let mut args = self.delimited(Token::Comma, Token::RParen, Self::ident)?;
+        self.expect(Token::LBrace)?;
+        let body: Box<[Stmt<'src>]> = self.until(Token::RBrace, Self::stmt)?.into();
+
+        let last_arg = args
+            .pop()
+            .ok_or_else(|| self.err_here(vec![Expected::Ident]))?;
+
+        let inner_fn = Expr::Fn {
+            arg: last_arg,
+            body,
+        };
+
+        let curried_fn = args.into_iter().rfold(inner_fn, |acc_expr, arg| Expr::Fn {
+            arg,
+            body: Box::new([Stmt::Return(acc_expr)]),
+        });
+
+        Ok(Stmt::Assign {
+            lhs: Expr::Ident(name),
+            rhs: curried_fn,
+        })
+    }
+
+    fn expr(&mut self) -> PResult<'src, Expr<'src>> {
+        self.pratt(0)
+    }
+
+    fn pratt(&mut self, min_prec: Prec) -> PResult<'src, Expr<'src>> {
+        let mut lhs = self.prefix()?;
+
+        while let Some(op) = self.postfix_or_infix()
+            && op.prec() >= min_prec
+        {
+            self.toks.next(); // eat op
+
+            lhs = match op {
+                PostfixOrInfix::Call => {
+                    let args = self.delimited(Token::Comma, Token::RParen, Self::expr)?;
+                    Expr::call_many(lhs, args)
+                }
+                PostfixOrInfix::Infix(op) => {
+                    let rhs = self.pratt(op.assoc().rhs())?;
+                    Expr::infix(lhs, op, rhs)
+                }
+            };
+        }
+
+        Ok(lhs)
+    }
+
+    fn postfix_or_infix(&mut self) -> Option<PostfixOrInfix> {
+        let (tok, _) = self.toks.peek()?;
+        match tok {
+            Token::LParen => Some(PostfixOrInfix::Call),
+            tok => InfixOp::try_from(tok).ok().map(PostfixOrInfix::Infix),
+        }
+    }
+
+    fn prefix(&mut self) -> PResult<'src, Expr<'src>> {
+        let (tok, span) = self
+            .eat_if(|t| t != Token::Sep)
+            .ok_or_else(|| self.err_here(vec![Expected::Expr]))?;
+
+        match tok {
+            Token::Int(n) => Ok(Expr::Int(n)),
+            Token::Ident(name) => Ok(Expr::Ident(name)),
+            Token::LParen => {
+                let inner = self.pratt(0)?;
+                self.expect(Token::RParen)?;
+                Ok(inner)
+            }
+            Token::Fn => {
+                self.expect(Token::LParen)?;
+                let args = self.delimited(Token::Comma, Token::RParen, Self::ident)?;
+                self.expect(Token::LBrace)?;
+                let body = self.until(Token::RBrace, Self::stmt)?;
+                Expr::function(args, body).ok_or_else(|| self.err_here(vec![Expected::Ident]))
+            }
+            other => match PrefixOp::try_from(&other) {
+                Ok(op) => Ok(Expr::prefix(op, self.pratt(op.assoc().rhs())?)),
+                Err(_) => Err(PErr {
+                    span: Some(span),
+                    expected: vec![Expected::Expr],
+                    got: Some(other),
+                }),
+            },
+        }
+    }
+
     // combinator helpers
 
     fn err_here(&mut self, expected: impl Into<Vec<Expected<'src>>>) -> PErr<'src> {
@@ -95,22 +196,30 @@ where
         }
     }
 
+    fn at(&mut self, p: Token<'src>) -> bool {
+        self.toks.peek().is_some_and(|(t, _)| *t == p)
+    }
+
     fn at_eoi(&mut self) -> bool {
         self.toks.peek().is_none()
     }
 
-    fn eat(&mut self, p: impl TokenMatcher<'src>) -> bool {
-        self.toks.next_if(|(t, _)| p.matches(*t)).is_some()
+    fn eat(&mut self, p: Token<'src>) -> bool {
+        self.toks.next_if(|(t, _)| *t == p).is_some()
     }
 
-    fn eat_while(&mut self, p: impl TokenMatcher<'src>) {
+    fn eat_if(&mut self, p: impl FnOnce(Token<'src>) -> bool) -> Option<Spanned<Token<'src>>> {
+        self.toks.next_if(|(t, _)| p(*t))
+    }
+
+    fn eat_while(&mut self, p: Token<'src>) {
         while self.eat(p) {}
     }
 
-    fn expect(&mut self, expected: Token<'src>) -> PResult<'src, ()> {
-        self.eat(expected)
+    fn expect(&mut self, p: Token<'src>) -> PResult<'src, ()> {
+        self.eat(p)
             .then_some(())
-            .ok_or_else(|| self.err_here(vec![expected.into()]))
+            .ok_or_else(|| self.err_here(vec![p.into()]))
     }
 
     fn ident(&mut self) -> PResult<'src, &'src str> {
@@ -160,105 +269,9 @@ where
     }
 
     fn sync(&mut self) {
-        self.eat_while(|t| !matches!(t, Token::Sep | Token::Fn | Token::Return | Token::RBrack))
-    }
-
-    // grammar rules
-
-    fn stmt(&mut self) -> PResult<'src, Stmt<'src>> {
-        if self.eat(Token::Fn) {
-            return self.function();
-        }
-
-        let stmt = if self.eat(Token::Return) {
-            Stmt::Return(self.expr()?)
-        } else {
-            if self.at_eoi() {
-                return Err(self.err_here(vec![Expected::Stmt]));
-            }
-            let lhs = self.expr()?;
-            if self.eat(Token::Eq) {
-                let rhs = self.expr()?;
-                Stmt::Assign { lhs, rhs }
-            } else {
-                Stmt::Expr(lhs)
-            }
-        };
-
-        self.expect(Token::Sep)?;
-        Ok(stmt)
-    }
-
-    fn function(&mut self) -> PResult<'src, Stmt<'src>> {
-        let name = self.ident()?;
-        self.expect(Token::LParen)?;
-        let args = self.delimited(Token::Comma, Token::RParen, Self::ident)?;
-        self.expect(Token::LBrack)?;
-        let body = self.until(Token::RBrack, Self::stmt)?.into();
-        Ok(Stmt::FnDef { name, args, body })
-    }
-
-    fn expr(&mut self) -> PResult<'src, Expr<'src>> {
-        self.pratt(0)
-    }
-
-    fn pratt(&mut self, min_bp: u16) -> PResult<'src, Expr<'src>> {
-        let mut lhs = self.prefix()?;
-
-        while let Some(op) = self.peek_infix() {
-            if op.bp() < min_bp {
-                break;
-            }
-            self.toks.next(); // consume the operator token
-
-            lhs = match op {
-                PostfixOrInfix::Call => {
-                    let args = self.delimited(Token::Comma, Token::RParen, Self::expr)?;
-                    Expr::Call {
-                        fun: Box::new(lhs),
-                        args,
-                    }
-                }
-                PostfixOrInfix::Infix(op) => {
-                    let rhs = self.pratt(op.bp().1)?;
-                    Expr::infix(lhs, op, rhs)
-                }
-            };
-        }
-
-        Ok(lhs)
-    }
-
-    fn peek_infix(&mut self) -> Option<PostfixOrInfix> {
-        let (tok, _) = self.toks.peek()?;
-        match tok {
-            Token::LParen => Some(PostfixOrInfix::Call),
-            tok => InfixOp::try_from(tok).ok().map(PostfixOrInfix::Infix),
-        }
-    }
-
-    fn prefix(&mut self) -> PResult<'src, Expr<'src>> {
-        let (tok, span) = self
-            .toks
-            .next_if(|(t, _)| *t != Token::Sep)
-            .ok_or_else(|| self.err_here(vec![Expected::Expr]))?;
-
-        match tok {
-            Token::Num(n) => Ok(Expr::Num(n)),
-            Token::Ident(name) => Ok(Expr::Ident(name)),
-            Token::LParen => {
-                let inner = self.pratt(0)?;
-                self.expect(Token::RParen)?;
-                Ok(inner)
-            }
-            other => match PrefixOp::try_from(&other) {
-                Ok(op) => Ok(Expr::prefix(op, self.pratt(op.bp().1)?)),
-                Err(_) => Err(PErr {
-                    span: Some(span),
-                    expected: vec![Expected::Expr],
-                    got: Some(other),
-                }),
-            },
-        }
+        while self
+            .eat_if(|t| !matches!(t, Token::Sep | Token::Fn | Token::Return | Token::RBrace))
+            .is_some()
+        {}
     }
 }

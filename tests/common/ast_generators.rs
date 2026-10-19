@@ -15,17 +15,16 @@ pub fn arb_ident() -> impl Strategy<Value = &'static str> {
         .prop_map(leak)
 }
 
-/// Strategies for generating numeric string representations.
-pub fn arb_num() -> impl Strategy<Value = &'static str> {
-    "[0-9]{1,6}".prop_map(leak)
+pub fn arb_int() -> impl Strategy<Value = i64> {
+    "[0-9]{1,6}"
+        .prop_map(leak)
+        .prop_map(|s| s.parse::<i64>().unwrap())
 }
 
-/// Strategies for prefix operators.
 pub fn arb_prefix_op() -> impl Strategy<Value = PrefixOp> {
     prop_oneof![Just(PrefixOp::Neg), Just(PrefixOp::Pos),]
 }
 
-/// Strategies for infix operators.
 pub fn arb_infix_op() -> impl Strategy<Value = InfixOp> {
     prop_oneof![
         Just(InfixOp::Add),
@@ -35,34 +34,24 @@ pub fn arb_infix_op() -> impl Strategy<Value = InfixOp> {
     ]
 }
 
-/// Recursive strategy for expressions.
-///
-/// `depth`: Maximum tree recursion depth (e.g. 4)
-/// `desired_size`: Approximate maximum nodes in the tree (e.g. 16)
-/// `expected_branch_size`: Expected items in collection branches (e.g. 2 for call args)
 pub fn arb_expr(depth: u32, desired_size: u32) -> BoxedStrategy<Expr<'static>> {
     let leaf = prop_oneof![
-        arb_num().prop_map(Expr::Num),
+        arb_int().prop_map(Expr::Int),
         arb_ident().prop_map(Expr::Ident),
     ];
 
     leaf.prop_recursive(depth, desired_size, 3, |inner| {
         prop_oneof![
-            // 1. Prefix expressions: -x, !y
+            // 1. Prefix expressions: -x, +y
             (arb_prefix_op(), inner.clone()).prop_map(|(op, expr)| Expr::prefix(op, expr)),
             // 2. Infix expressions: a + b
             (inner.clone(), arb_infix_op(), inner.clone())
                 .prop_map(|(lhs, op, rhs)| Expr::infix(lhs, op, rhs)),
-            // 3. Postfix / Call expressions: fun(arg1, arg2)
-            (inner, proptest::collection::vec(arb_expr(1, 3), 0..4)).prop_map(|(fun, args)| {
-                Expr::Call {
-                    fun: Box::new(fun),
-                    args,
-                }
-            }),
+            // 3. Curried Call expressions: fun(arg1)(arg2)... (minimum 1 arg: 1..4)
+            (inner, vec(arb_expr(1, 3), 1..4)).prop_map(|(fun, args)| Expr::call_many(fun, args)),
         ]
     })
-    .boxed() // <-- Add .boxed() here
+    .boxed()
 }
 
 /// Strategy for generating single statements.
@@ -72,20 +61,19 @@ pub fn arb_stmt(depth: u32, size: u32) -> impl Strategy<Value = Stmt<'static>> {
         arb_expr(depth, size).prop_map(Stmt::Expr),
         (arb_expr(depth, size), arb_expr(depth, size))
             .prop_map(|(lhs, rhs)| Stmt::Assign { lhs, rhs }),
+        // Definicja funkcji jako Stmt::Assign z rozwiniętym (curried) Expr::Fn (minimum 1 arg: 1..4)
         (
             arb_ident(),
-            vec(arb_ident(), 0..4),
-            vec(arb_stmt_leaf(), 0..4), // Keep inner bodies small to prevent combinatorial blow-up
+            vec(arb_ident(), 1..4),
+            vec(arb_stmt_leaf(), 0..4),
         )
-            .prop_map(|(name, args, body)| Stmt::FnDef {
-                name,
-                args,
-                body: body.into(),
+            .prop_map(|(name, args, body)| Stmt::Assign {
+                lhs: Expr::Ident(name),
+                rhs: Expr::function(args, body).unwrap(),
             }),
     ]
 }
 
-/// Shallow leaf statement helper to prevent deep recursion inside nested function defs.
 fn arb_stmt_leaf() -> impl Strategy<Value = Stmt<'static>> {
     prop_oneof![
         arb_expr(1, 4).prop_map(Stmt::Return),
@@ -94,7 +82,6 @@ fn arb_stmt_leaf() -> impl Strategy<Value = Stmt<'static>> {
     ]
 }
 
-/// Strategy for generating a full Program.
 pub fn arb_program() -> impl Strategy<Value = Program<'static>> {
     vec(arb_stmt(3, 10), 0..10).prop_map(Program::from)
 }

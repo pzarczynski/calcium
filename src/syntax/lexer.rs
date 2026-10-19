@@ -16,6 +16,22 @@ impl<T: Into<usize>> From<Range<T>> for Span {
     }
 }
 
+impl ariadne::Span for Span {
+    type SourceId = ();
+
+    fn source(&self) -> &Self::SourceId {
+        &()
+    }
+
+    fn start(&self) -> usize {
+        self.start
+    }
+
+    fn end(&self) -> usize {
+        self.end
+    }
+}
+
 pub type Spanned<T> = (T, Span);
 
 pub trait Lex<'src>: Logos<'src> + Sized + 'src
@@ -38,9 +54,9 @@ impl<'src> Lex<'src> for Token<'src> {
 }
 
 #[derive(Logos, Debug, Copy, Clone, PartialEq, Eq, Hash)]
-#[logos(skip r"[ \t\f]+")]
+#[logos(skip r"[ \r\n\t\f]+")]
 pub enum Token<'src> {
-    #[regex(r"\n|\r\n|;")]
+    #[regex(r";")]
     Sep,
 
     #[token("=")]
@@ -59,10 +75,10 @@ pub enum Token<'src> {
     RParen,
 
     #[token("{")]
-    LBrack,
+    LBrace,
 
     #[token("}")]
-    RBrack,
+    RBrace,
 
     #[token("+")]
     Plus,
@@ -79,8 +95,8 @@ pub enum Token<'src> {
     #[token(",")]
     Comma,
 
-    #[regex(r"[0-9]+", |lex| lex.slice())]
-    Num(&'src str),
+    #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().unwrap())]
+    Int(i64),
 
     #[regex("[A-Za-z_][a-zA-Z0-9_]*", |lex| lex.slice())]
     Ident(&'src str),
@@ -102,9 +118,9 @@ impl fmt::Display for Token<'_> {
             Token::Comma => write!(f, ","),
             Token::LParen => write!(f, "("),
             Token::RParen => write!(f, ")"),
-            Token::LBrack => write!(f, "{{"),
-            Token::RBrack => write!(f, "}}"),
-            Token::Num(n) => write!(f, "{n}"),
+            Token::LBrace => write!(f, "{{"),
+            Token::RBrace => write!(f, "}}"),
+            Token::Int(n) => write!(f, "{n}"),
             Token::Ident(id) => write!(f, "{id}"),
             Token::Invalid => write!(f, "<invalid>"),
         }
