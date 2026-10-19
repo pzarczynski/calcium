@@ -1,6 +1,6 @@
 mod common;
 
-use calcium::{Lexable, Parser, Token};
+use calcium::{Lex, Parser, Token};
 use common::ast_generators::*;
 use proptest::prelude::*;
 

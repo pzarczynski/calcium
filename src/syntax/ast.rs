@@ -3,31 +3,31 @@ use std::ops;
 
 use crate::Token;
 
-pub type Program = Stmts;
+pub type Program<'src> = Stmts<'src>;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Stmts(pub Vec<Stmt>);
+pub struct Stmts<'src>(pub Vec<Stmt<'src>>);
 
-impl ops::Deref for Stmts {
-    type Target = Vec<Stmt>;
+impl<'src> ops::Deref for Stmts<'src> {
+    type Target = Vec<Stmt<'src>>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl ops::DerefMut for Stmts {
+impl<'src> ops::DerefMut for Stmts<'src> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl From<Vec<Stmt>> for Stmts {
-    fn from(v: Vec<Stmt>) -> Self {
+impl<'src> From<Vec<Stmt<'src>>> for Stmts<'src> {
+    fn from(v: Vec<Stmt<'src>>) -> Self {
         Stmts(v)
     }
 }
 
-impl fmt::Display for Stmts {
+impl fmt::Display for Stmts<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for stmt in self.iter() {
             write!(f, "{stmt}")?;
@@ -37,21 +37,21 @@ impl fmt::Display for Stmts {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Stmt {
-    Expr(Expr),
+pub enum Stmt<'src> {
+    Expr(Expr<'src>),
     Assign {
-        lhs: Expr,
-        rhs: Expr,
+        lhs: Expr<'src>,
+        rhs: Expr<'src>,
     },
     FnDef {
-        name: String,
-        args: Vec<String>,
-        body: Stmts,
+        name: &'src str,
+        args: Vec<&'src str>,
+        body: Stmts<'src>,
     },
-    Return(Expr),
+    Return(Expr<'src>),
 }
 
-impl fmt::Display for Stmt {
+impl fmt::Display for Stmt<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Stmt::Expr(expr) => write!(f, "{expr};"),
@@ -72,31 +72,31 @@ impl fmt::Display for Stmt {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
-    Num(String),
-    Ident(String),
+pub enum Expr<'src> {
+    Num(&'src str),
+    Ident(&'src str),
     Prefix {
         op: PrefixOp,
-        expr: Box<Expr>,
+        expr: Box<Expr<'src>>,
     },
     Infix {
         op: InfixOp,
-        l: Box<Expr>,
-        r: Box<Expr>,
+        l: Box<Expr<'src>>,
+        r: Box<Expr<'src>>,
     },
     Call {
-        fun: Box<Expr>,
-        args: Vec<Expr>,
+        fun: Box<Expr<'src>>,
+        args: Vec<Expr<'src>>,
     },
 }
 
-impl fmt::Display for Expr {
+impl fmt::Display for Expr<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.format(f, 0)
     }
 }
 
-impl Expr {
+impl<'src> Expr<'src> {
     pub fn bp(&self) -> u16 {
         match self {
             Expr::Num(_) | Expr::Ident(_) => MAX_BP,
@@ -106,7 +106,7 @@ impl Expr {
         }
     }
 
-    pub fn infix(lhs: Expr, op: InfixOp, rhs: Expr) -> Self {
+    pub fn infix(lhs: Expr<'src>, op: InfixOp, rhs: Expr<'src>) -> Self {
         Expr::Infix {
             op,
             l: Box::new(lhs),
@@ -114,7 +114,7 @@ impl Expr {
         }
     }
 
-    pub fn prefix(op: PrefixOp, expr: Expr) -> Self {
+    pub fn prefix(op: PrefixOp, expr: Expr<'src>) -> Self {
         Expr::Prefix {
             op,
             expr: Box::new(expr),
@@ -189,6 +189,15 @@ pub enum InfixOp {
 pub enum PostfixOrInfix {
     Call,
     Infix(InfixOp),
+}
+
+impl PostfixOrInfix {
+    pub fn bp(&self) -> u16 {
+        match self {
+            PostfixOrInfix::Call => MAX_BP,
+            PostfixOrInfix::Infix(op) => op.bp().0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

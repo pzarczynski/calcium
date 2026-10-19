@@ -3,16 +3,21 @@ use proptest::prelude::*;
 
 use calcium::ast::*;
 
-/// Strategies for generating identifiers (valid non-empty ASCII words).
-pub fn arb_ident() -> impl Strategy<Value = String> {
-    "[a-zA-Z_][a-zA-Z0-9_]{0,10}".prop_filter("cannot be reserved keywords", |s| {
-        !matches!(s.as_str(), "fn" | "return")
-    })
+const KEYWORDS: &[&str] = &["fn", "return"];
+
+fn leak(s: String) -> &'static str {
+    &*s.leak()
+}
+
+pub fn arb_ident() -> impl Strategy<Value = &'static str> {
+    "[a-zA-Z_][a-zA-Z0-9_]{0,6}"
+        .prop_filter("must not be a keyword", |s| !KEYWORDS.contains(&s.as_str()))
+        .prop_map(leak)
 }
 
 /// Strategies for generating numeric string representations.
-pub fn arb_num() -> impl Strategy<Value = String> {
-    "[0-9]{1,6}"
+pub fn arb_num() -> impl Strategy<Value = &'static str> {
+    "[0-9]{1,6}".prop_map(leak)
 }
 
 /// Strategies for prefix operators.
@@ -35,7 +40,7 @@ pub fn arb_infix_op() -> impl Strategy<Value = InfixOp> {
 /// `depth`: Maximum tree recursion depth (e.g. 4)
 /// `desired_size`: Approximate maximum nodes in the tree (e.g. 16)
 /// `expected_branch_size`: Expected items in collection branches (e.g. 2 for call args)
-pub fn arb_expr(depth: u32, desired_size: u32) -> BoxedStrategy<Expr> {
+pub fn arb_expr(depth: u32, desired_size: u32) -> BoxedStrategy<Expr<'static>> {
     let leaf = prop_oneof![
         arb_num().prop_map(Expr::Num),
         arb_ident().prop_map(Expr::Ident),
@@ -61,16 +66,12 @@ pub fn arb_expr(depth: u32, desired_size: u32) -> BoxedStrategy<Expr> {
 }
 
 /// Strategy for generating single statements.
-pub fn arb_stmt(depth: u32, desired_size: u32) -> impl Strategy<Value = Stmt> {
+pub fn arb_stmt(depth: u32, size: u32) -> impl Strategy<Value = Stmt<'static>> {
     prop_oneof![
-        // Return statement: return <expr>
-        arb_expr(depth, desired_size).prop_map(Stmt::Return),
-        // Expression statement: <expr>
-        arb_expr(depth, desired_size).prop_map(Stmt::Expr),
-        // Assignment statement: <lhs> = <rhs>
-        (arb_expr(depth, desired_size), arb_expr(depth, desired_size))
+        arb_expr(depth, size).prop_map(Stmt::Return),
+        arb_expr(depth, size).prop_map(Stmt::Expr),
+        (arb_expr(depth, size), arb_expr(depth, size))
             .prop_map(|(lhs, rhs)| Stmt::Assign { lhs, rhs }),
-        // Function definition: fn name(args) [ body ]
         (
             arb_ident(),
             vec(arb_ident(), 0..4),
@@ -85,7 +86,7 @@ pub fn arb_stmt(depth: u32, desired_size: u32) -> impl Strategy<Value = Stmt> {
 }
 
 /// Shallow leaf statement helper to prevent deep recursion inside nested function defs.
-fn arb_stmt_leaf() -> impl Strategy<Value = Stmt> {
+fn arb_stmt_leaf() -> impl Strategy<Value = Stmt<'static>> {
     prop_oneof![
         arb_expr(1, 4).prop_map(Stmt::Return),
         arb_expr(1, 4).prop_map(Stmt::Expr),
@@ -94,6 +95,6 @@ fn arb_stmt_leaf() -> impl Strategy<Value = Stmt> {
 }
 
 /// Strategy for generating a full Program.
-pub fn arb_program() -> impl Strategy<Value = Program> {
+pub fn arb_program() -> impl Strategy<Value = Program<'static>> {
     vec(arb_stmt(3, 10), 0..10).prop_map(Program::from)
 }

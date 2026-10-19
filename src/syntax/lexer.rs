@@ -18,14 +18,14 @@ impl<T: Into<usize>> From<Range<T>> for Span {
 
 pub type Spanned<T> = (T, Span);
 
-pub trait Lexable<'src>: Logos<'src> + Sized + 'src
+pub trait Lex<'src>: Logos<'src> + Sized + 'src
 where
     Self::Extras: Default,
 {
     fn lex(src: &'src Self::Source) -> impl Iterator<Item = Spanned<Self>>;
 }
 
-impl<'src> Lexable<'src> for Token<'src> {
+impl<'src> Lex<'src> for Token<'src> {
     fn lex(src: &'src Self::Source) -> impl Iterator<Item = Spanned<Self>> {
         Self::lexer(src).spanned().map(|(tok, r)| {
             let span: Span = r.into();
@@ -37,7 +37,7 @@ impl<'src> Lexable<'src> for Token<'src> {
     }
 }
 
-#[derive(Logos, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Logos, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[logos(skip r"[ \t\f]+")]
 pub enum Token<'src> {
     #[regex(r"\n|\r\n|;")]
