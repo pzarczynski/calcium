@@ -9,7 +9,7 @@ use calcium::{Lex, Parser, Token};
 fn format_expected(expected: &[Expected<'_>]) -> String {
     match expected {
         [] => "something else".to_string(),
-        [single] => format!("{single:?}"), // zamień na `{single}` jeśli masz Display
+        [single] => format!("{single:?}"),
         [init @ .., last] => {
             let joined = init
                 .iter()

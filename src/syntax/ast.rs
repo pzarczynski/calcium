@@ -1,4 +1,3 @@
-use std::fmt;
 use std::ops;
 
 use crate::Token;
@@ -27,30 +26,11 @@ impl<'src> From<Vec<Stmt<'src>>> for Stmts<'src> {
     }
 }
 
-impl fmt::Display for Stmts<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for stmt in self.iter() {
-            write!(f, "{stmt}")?;
-        }
-        Ok(())
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt<'src> {
     Expr(Expr<'src>),
     Assign { lhs: Expr<'src>, rhs: Expr<'src> },
     Return(Expr<'src>),
-}
-
-impl fmt::Display for Stmt<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Stmt::Expr(expr) => write!(f, "{expr}; "),
-            Stmt::Assign { lhs, rhs } => write!(f, "{lhs} = {rhs}; "),
-            Stmt::Return(expr) => write!(f, "return {expr}; "),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -74,12 +54,6 @@ pub enum Expr<'src> {
         arg: &'src str,
         body: Box<[Stmt<'src>]>,
     },
-}
-
-impl fmt::Display for Expr<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.format(f, 0)
-    }
 }
 
 impl<'src> Expr<'src> {
@@ -134,59 +108,6 @@ impl<'src> Expr<'src> {
             arg,
             body: Box::new([Stmt::Return(acc)]),
         }))
-    }
-
-    fn format(&self, f: &mut fmt::Formatter<'_>, min_prec: Prec) -> fmt::Result {
-        let needs_parens = self.prec() < min_prec;
-        if needs_parens {
-            f.write_str("(")?;
-        }
-
-        match self {
-            Self::Int(value) => f.write_fmt(format_args!("{value}"))?,
-            Self::Ident(value) => f.write_str(value)?,
-
-            Self::Prefix { op, expr } => {
-                let bp = if matches!(expr.as_ref(), Self::Prefix { .. }) {
-                    Prec::MAX
-                } else {
-                    op.prec()
-                };
-
-                write!(f, "{op}")?;
-                expr.format(f, bp)?;
-            }
-
-            Self::Infix { op, l, r } => {
-                let (l_bp, r_bp) = match op.assoc() {
-                    Assoc::Left(p) => (p, p + 1),
-                    Assoc::Right(p) => (p + 1, p),
-                };
-
-                l.format(f, l_bp)?;
-                write!(f, " {op} ")?;
-                r.format(f, r_bp)?;
-            }
-
-            Self::Fn { arg, body } => {
-                write!(f, "fn({arg}) {{ ")?;
-                for stmt in body.iter() {
-                    write!(f, "{stmt}")?;
-                }
-                f.write_str("}")?;
-            }
-
-            Self::Call { fun, arg } => {
-                fun.format(f, self.prec())?;
-                write!(f, "({arg})")?;
-            }
-        }
-
-        if needs_parens {
-            f.write_str(")")?;
-        }
-
-        Ok(())
     }
 }
 
@@ -268,18 +189,6 @@ impl TryFrom<&Token<'_>> for InfixOp {
     }
 }
 
-impl fmt::Display for InfixOp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let sym = match self {
-            InfixOp::Add => "+",
-            InfixOp::Sub => "-",
-            InfixOp::Mul => "*",
-            InfixOp::Div => "/",
-        };
-        write!(f, "{sym}")
-    }
-}
-
 impl PostfixOrInfix {
     pub fn prec(&self) -> Prec {
         match self {
@@ -319,15 +228,5 @@ impl TryFrom<&Token<'_>> for PrefixOp {
             Token::Minus => Ok(PrefixOp::Neg),
             _ => Err(()),
         }
-    }
-}
-
-impl fmt::Display for PrefixOp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let sym = match self {
-            PrefixOp::Pos => "+",
-            PrefixOp::Neg => "-",
-        };
-        write!(f, "{sym}")
     }
 }

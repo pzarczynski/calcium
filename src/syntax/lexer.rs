@@ -1,7 +1,7 @@
 use logos::Logos;
 use std::{fmt, ops::Range};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     pub start: usize,
     pub end: usize,

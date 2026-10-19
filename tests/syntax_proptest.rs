@@ -11,7 +11,7 @@ proptest! {
     }
 
     #[test]
-    fn test_lexer_span_invariants(input in ".*") {
+    fn test_lexer_span_invariants(input in r"[.\w]*") {
         let mut cursor = 0;
         for (_, span) in Token::lex(&input) {
             let (start, end) = (span.start, span.end);

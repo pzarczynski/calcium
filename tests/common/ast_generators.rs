@@ -42,12 +42,12 @@ pub fn arb_expr(depth: u32, desired_size: u32) -> BoxedStrategy<Expr<'static>> {
 
     leaf.prop_recursive(depth, desired_size, 3, |inner| {
         prop_oneof![
-            // 1. Prefix expressions: -x, +y
+            // prefix expr
             (arb_prefix_op(), inner.clone()).prop_map(|(op, expr)| Expr::prefix(op, expr)),
-            // 2. Infix expressions: a + b
+            // infix expr
             (inner.clone(), arb_infix_op(), inner.clone())
                 .prop_map(|(lhs, op, rhs)| Expr::infix(lhs, op, rhs)),
-            // 3. Curried Call expressions: fun(arg1)(arg2)... (minimum 1 arg: 1..4)
+            // curried call exprs
             (inner, vec(arb_expr(1, 3), 1..4)).prop_map(|(fun, args)| Expr::call_many(fun, args)),
         ]
     })
@@ -55,13 +55,16 @@ pub fn arb_expr(depth: u32, desired_size: u32) -> BoxedStrategy<Expr<'static>> {
 }
 
 /// Strategy for generating single statements.
-pub fn arb_stmt(depth: u32, size: u32) -> impl Strategy<Value = Stmt<'static>> {
+pub fn arb_stmt(depth: u32, desired_size: u32) -> impl Strategy<Value = Stmt<'static>> {
     prop_oneof![
-        arb_expr(depth, size).prop_map(Stmt::Return),
-        arb_expr(depth, size).prop_map(Stmt::Expr),
-        (arb_expr(depth, size), arb_expr(depth, size))
+        // return stmt
+        arb_expr(depth, desired_size).prop_map(Stmt::Return),
+        // expr stmt
+        arb_expr(depth, desired_size).prop_map(Stmt::Expr),
+        // assign stmt
+        (arb_expr(depth, desired_size), arb_expr(depth, desired_size))
             .prop_map(|(lhs, rhs)| Stmt::Assign { lhs, rhs }),
-        // Definicja funkcji jako Stmt::Assign z rozwiniętym (curried) Expr::Fn (minimum 1 arg: 1..4)
+        // function stmt
         (
             arb_ident(),
             vec(arb_ident(), 1..4),
