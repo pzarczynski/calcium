@@ -1,7 +1,7 @@
 use crate::syntax::ast::*;
 use std::fmt;
 
-impl fmt::Display for Stmts<'_> {
+impl fmt::Display for Stmts {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt_stmts(self.iter(), f)
     }
@@ -9,7 +9,7 @@ impl fmt::Display for Stmts<'_> {
 
 fn fmt_stmts<'a, I>(stmts: I, f: &mut fmt::Formatter<'_>) -> fmt::Result
 where
-    I: IntoIterator<Item = &'a Stmt<'a>>,
+    I: IntoIterator<Item = &'a Stmt>,
 {
     let mut iter = stmts.into_iter();
     if let Some(first) = iter.next() {
@@ -21,7 +21,7 @@ where
     Ok(())
 }
 
-impl fmt::Display for Stmt<'_> {
+impl fmt::Display for Stmt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Stmt::Expr(expr) => write!(f, "{expr};"),
@@ -35,14 +35,14 @@ impl fmt::Display for Stmt<'_> {
     }
 }
 
-impl fmt::Display for Expr<'_> {
+impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.fmt_prec(f, 0)
     }
 }
 
 /// Un-curries nested `Expr::Fn` chains back into `fn name(arg1, arg2) { body };`
-fn fmt_fn_decl(name: &str, mut curr: &Expr<'_>, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+fn fmt_fn_decl(name: &str, mut curr: &Expr, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     write!(f, "fn {name}(")?;
 
     let mut first = true;
@@ -71,7 +71,7 @@ fn fmt_fn_decl(name: &str, mut curr: &Expr<'_>, f: &mut fmt::Formatter<'_>) -> f
     f.write_str(" }")
 }
 
-impl Expr<'_> {
+impl Expr {
     fn fmt_prec(&self, f: &mut fmt::Formatter<'_>, min_prec: Prec) -> fmt::Result {
         // Nested prefix expressions like `-(-x)` or `-(+x)` must be parenthesized
         // to avoid lexing ambiguity (e.g. `--` token) and preserve clarity.

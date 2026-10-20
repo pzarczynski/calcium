@@ -1,7 +1,5 @@
-mod common;
-
+use calcium::syntax::arbitrary::*;
 use calcium::{Lex, Parser, Token};
-use common::ast_generators::*;
 use proptest::prelude::*;
 
 proptest! {
@@ -29,7 +27,7 @@ proptest! {
 
     // parse(format(ast)) == ast
     #[test]
-    fn test_ast_round_trip(ast in arb_program()) {
+    fn test_ast_round_trip(ast in any::<Program>()) {
         let printed = ast.to_string();
 
         let lexed = Token::lex(printed.as_str()).collect::<Vec<_>>();

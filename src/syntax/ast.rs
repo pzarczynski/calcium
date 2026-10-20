@@ -2,61 +2,61 @@ use std::ops;
 
 use crate::Token;
 
-pub type Program<'src> = Stmts<'src>;
+pub type Program = Stmts;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Stmts<'src>(pub Vec<Stmt<'src>>);
+pub struct Stmts(pub Vec<Stmt>);
 
-impl<'src> ops::Deref for Stmts<'src> {
-    type Target = Vec<Stmt<'src>>;
+impl ops::Deref for Stmts {
+    type Target = Vec<Stmt>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl<'src> ops::DerefMut for Stmts<'src> {
+impl ops::DerefMut for Stmts {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl<'src> From<Vec<Stmt<'src>>> for Stmts<'src> {
-    fn from(v: Vec<Stmt<'src>>) -> Self {
+impl From<Vec<Stmt>> for Stmts {
+    fn from(v: Vec<Stmt>) -> Self {
         Stmts(v)
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Stmt<'src> {
-    Expr(Expr<'src>),
-    Assign { lhs: Expr<'src>, rhs: Expr<'src> },
-    Return(Expr<'src>),
+pub enum Stmt {
+    Expr(Expr),
+    Assign { lhs: Expr, rhs: Expr },
+    Return(Expr),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr<'src> {
+pub enum Expr {
     Int(i64),
-    Ident(&'src str),
+    Ident(String),
     Prefix {
         op: PrefixOp,
-        expr: Box<Expr<'src>>,
+        expr: Box<Expr>,
     },
     Infix {
         op: InfixOp,
-        l: Box<Expr<'src>>,
-        r: Box<Expr<'src>>,
+        l: Box<Expr>,
+        r: Box<Expr>,
     },
     Call {
-        fun: Box<Expr<'src>>,
-        arg: Box<Expr<'src>>,
+        fun: Box<Expr>,
+        arg: Box<Expr>,
     },
     Fn {
-        arg: &'src str,
-        body: Box<[Stmt<'src>]>,
+        arg: String,
+        body: Box<[Stmt]>,
     },
 }
 
-impl<'src> Expr<'src> {
+impl Expr {
     pub fn prec(&self) -> Prec {
         match self {
             Expr::Int(_) | Expr::Ident(_) => Prec::MAX,
@@ -67,7 +67,14 @@ impl<'src> Expr<'src> {
         }
     }
 
-    pub fn infix(lhs: Expr<'src>, op: InfixOp, rhs: Expr<'src>) -> Self {
+    pub fn prefix(op: PrefixOp, expr: Expr) -> Self {
+        Expr::Prefix {
+            op,
+            expr: Box::new(expr),
+        }
+    }
+
+    pub fn infix(lhs: Expr, op: InfixOp, rhs: Expr) -> Self {
         Expr::Infix {
             op,
             l: Box::new(lhs),
@@ -75,32 +82,24 @@ impl<'src> Expr<'src> {
         }
     }
 
-    pub fn prefix(op: PrefixOp, expr: Expr<'src>) -> Self {
-        Expr::Prefix {
-            op,
-            expr: Box::new(expr),
-        }
-    }
-
-    pub fn call(fun: Expr<'src>, arg: Expr<'src>) -> Self {
+    pub fn call(fun: Expr, arg: Expr) -> Self {
         Expr::Call {
             fun: Box::new(fun),
             arg: Box::new(arg),
         }
     }
 
-    pub fn call_many(fun: Expr<'src>, args: impl IntoIterator<Item = Expr<'src>>) -> Self {
+    pub fn call_many(fun: Expr, args: impl IntoIterator<Item = Expr>) -> Self {
         args.into_iter().fold(fun, Self::call)
     }
 
     pub fn function(
-        args: impl IntoIterator<Item = &'src str, IntoIter: DoubleEndedIterator>,
-        body: impl Into<Box<[Stmt<'src>]>>,
+        args: impl IntoIterator<Item = String, IntoIter: DoubleEndedIterator>,
+        body: impl Into<Box<[Stmt]>>,
     ) -> Option<Self> {
         let mut iter = args.into_iter().rev();
-        let last_arg = iter.next()?;
         let innermost = Expr::Fn {
-            arg: last_arg,
+            arg: iter.next()?,
             body: body.into(),
         };
 
@@ -112,12 +111,14 @@ impl<'src> Expr<'src> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "arbitrary", derive(proptest_derive::Arbitrary))]
 pub enum PrefixOp {
     Pos,
     Neg,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "arbitrary", derive(proptest_derive::Arbitrary))]
 pub enum InfixOp {
     Add,
     Sub,
@@ -160,6 +161,32 @@ impl Assoc {
     }
 }
 
+impl PrefixOp {
+    pub fn prec(self) -> u16 {
+        match self {
+            PrefixOp::Pos | PrefixOp::Neg => 40,
+        }
+    }
+
+    pub fn assoc(self) -> Assoc {
+        match self {
+            PrefixOp::Pos | PrefixOp::Neg => Assoc::Left(self.prec()),
+        }
+    }
+}
+
+impl TryFrom<&Token> for PrefixOp {
+    type Error = ();
+
+    fn try_from(value: &Token) -> Result<Self, Self::Error> {
+        match value {
+            Token::Plus => Ok(PrefixOp::Pos),
+            Token::Minus => Ok(PrefixOp::Neg),
+            _ => Err(()),
+        }
+    }
+}
+
 impl InfixOp {
     pub fn prec(self) -> Prec {
         match self {
@@ -175,7 +202,7 @@ impl InfixOp {
     }
 }
 
-impl TryFrom<&Token<'_>> for InfixOp {
+impl TryFrom<&Token> for InfixOp {
     type Error = ();
 
     fn try_from(value: &Token) -> Result<Self, Self::Error> {
@@ -201,32 +228,6 @@ impl PostfixOrInfix {
         match self {
             PostfixOrInfix::Call => Assoc::Left(Prec::MAX),
             PostfixOrInfix::Infix(op) => op.assoc(),
-        }
-    }
-}
-
-impl PrefixOp {
-    pub fn prec(self) -> u16 {
-        match self {
-            PrefixOp::Pos | PrefixOp::Neg => 40,
-        }
-    }
-
-    pub fn assoc(self) -> Assoc {
-        match self {
-            PrefixOp::Pos | PrefixOp::Neg => Assoc::Left(self.prec()),
-        }
-    }
-}
-
-impl TryFrom<&Token<'_>> for PrefixOp {
-    type Error = ();
-
-    fn try_from(value: &Token) -> Result<Self, Self::Error> {
-        match value {
-            Token::Plus => Ok(PrefixOp::Pos),
-            Token::Minus => Ok(PrefixOp::Neg),
-            _ => Err(()),
         }
     }
 }

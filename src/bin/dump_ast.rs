@@ -6,7 +6,7 @@ use ariadne::{Color, Label, Report, ReportKind, Source};
 use calcium::syntax::parser::{Expected, PErr};
 use calcium::{Lex, Parser, Token};
 
-fn format_expected(expected: &[Expected<'_>]) -> String {
+fn format_expected(expected: &[Expected]) -> String {
     match expected {
         [] => "something else".to_string(),
         [single] => format!("{single:?}"),
@@ -21,7 +21,7 @@ fn format_expected(expected: &[Expected<'_>]) -> String {
     }
 }
 
-fn report_errors(filename: &str, src: &str, errors: Vec<PErr<'_>>) {
+fn report_errors(filename: &str, src: &str, errors: Vec<PErr>) {
     let eoi_span = src.len()..src.len();
 
     for err in errors {

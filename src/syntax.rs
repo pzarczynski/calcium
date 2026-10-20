@@ -3,5 +3,8 @@ pub mod display;
 pub mod lexer;
 pub mod parser;
 
+#[cfg(feature = "arbitrary")]
+pub mod arbitrary;
+
 pub use lexer::{Lex, Token};
 pub use parser::Parser;

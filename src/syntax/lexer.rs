@@ -41,7 +41,7 @@ where
     fn lex(src: &'src Self::Source) -> impl Iterator<Item = Spanned<Self>>;
 }
 
-impl<'src> Lex<'src> for Token<'src> {
+impl<'src> Lex<'src> for Token {
     fn lex(src: &'src Self::Source) -> impl Iterator<Item = Spanned<Self>> {
         Self::lexer(src).spanned().map(|(tok, r)| {
             let span: Span = r.into();
@@ -53,9 +53,9 @@ impl<'src> Lex<'src> for Token<'src> {
     }
 }
 
-#[derive(Logos, Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Logos, Debug, Clone, PartialEq, Eq, Hash)]
 #[logos(skip r"[ \r\n\t\f]+")]
-pub enum Token<'src> {
+pub enum Token {
     #[regex(r";")]
     Sep,
 
@@ -98,13 +98,13 @@ pub enum Token<'src> {
     #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().unwrap())]
     Int(i64),
 
-    #[regex("[A-Za-z_][a-zA-Z0-9_]*", |lex| lex.slice())]
-    Ident(&'src str),
+    #[regex("[A-Za-z_][a-zA-Z0-9_]*", |lex| lex.slice().to_owned())]
+    Ident(String),
 
     Invalid,
 }
 
-impl fmt::Display for Token<'_> {
+impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Token::Sep => write!(f, ";"),

@@ -1,13 +1,11 @@
-mod common;
-
+use calcium::syntax::arbitrary::*;
 use calcium::{Lex, Parser, Token};
-use common::ast_generators::*;
 use proptest::prelude::*;
 
 proptest! {
     // format(parse(format(ast))) == format(ast)
     #[test]
-    fn test_pretty_printing_is_idempotent(ast in arb_program()) {
+    fn test_pretty_printing_is_idempotent(ast in any::<Program>()) {
         let printed = ast.to_string();
 
         let lexed = Token::lex(printed.as_str()).collect::<Vec<_>>();
