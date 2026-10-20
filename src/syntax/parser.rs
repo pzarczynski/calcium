@@ -1,8 +1,8 @@
 use crate::syntax::ast::*;
-use crate::syntax::lexer::{Span, Spanned, Token};
+use crate::syntax::{Span, Spanned, Symbol, Token};
 use std::iter::Peekable;
 
-const EOI: Option<&Token> = None;
+const EOI: Option<Token> = None;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expected {
@@ -12,35 +12,35 @@ pub enum Expected {
     Stmt,
 }
 
-impl From<&Token> for Expected {
+impl From<Token> for Expected {
     #[inline]
-    fn from(t: &Token) -> Self {
-        Self::Token(t.clone())
+    fn from(t: Token) -> Self {
+        Self::Token(t)
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct PErr {
-    pub span: Option<Span>,
+pub struct PErr<'src> {
+    pub span: Option<Span<'src>>,
     pub expected: Vec<Expected>,
     pub got: Option<Token>,
 }
 
-pub type PResult<T> = Result<T, PErr>;
+pub type PResult<'src, T> = Result<T, PErr<'src>>;
 
-pub struct Parser<I>
+pub struct Parser<'src, I>
 where
-    I: Iterator<Item = Spanned<Token>>,
+    I: Iterator<Item = Spanned<'src, Token>>,
 {
     toks: Peekable<I>,
-    errors: Vec<PErr>,
+    errors: Vec<PErr<'src>>,
 }
 
-impl<I> Parser<I>
+impl<'src, I> Parser<'src, I>
 where
-    I: Iterator<Item = Spanned<Token>>,
+    I: Iterator<Item = Spanned<'src, Token>>,
 {
-    pub fn parse(src: I) -> Result<Program, Vec<PErr>> {
+    pub fn parse(src: I) -> Result<Program, Vec<PErr<'src>>> {
         let mut parser = Self {
             toks: src.peekable(),
             errors: Vec::new(),
@@ -59,13 +59,13 @@ where
     //  Grammar rules
     // =========================================================================
 
-    /// Parses a sequence of statements until `end_delim` (or EOI if `None`),
+    /// Parses a sequence of statements until `end_delim`,
     /// performing stmt-level error recovery along the way.
-    fn parse_stmts_until(&mut self, end_delim: Option<&Token>) -> Vec<Stmt> {
+    fn parse_stmts_until(&mut self, end_delim: Option<Token>) -> Vec<Stmt> {
         let mut stmts = Vec::new();
 
         loop {
-            self.eat_while(&Token::Sep);
+            self.eat_while(Token::Sep);
 
             if self.at(end_delim) || self.at(EOI) {
                 break;
@@ -83,7 +83,7 @@ where
         stmts
     }
 
-    fn stmt(&mut self) -> PResult<Stmt> {
+    fn stmt(&mut self) -> PResult<'src, Stmt> {
         match self.peek_tok() {
             None => Err(self.err_here([Expected::Stmt])),
             Some(Token::Fn) => self.fn_decl(),
@@ -100,8 +100,8 @@ where
         }
     }
 
-    fn finish_expr_or_assign_stmt(&mut self, lhs: Expr) -> PResult<Stmt> {
-        let stmt = if self.eat(&Token::Eq) {
+    fn finish_expr_or_assign_stmt(&mut self, lhs: Expr) -> PResult<'src, Stmt> {
+        let stmt = if self.eat(Token::Eq) {
             let rhs = self.expr()?;
             Stmt::Assign { lhs, rhs }
         } else {
@@ -113,8 +113,8 @@ where
 
     /// Expects a statement terminator `;`. Allows omitting the trailing
     /// separator right before a closing brace `}`.
-    fn expect_stmt_end(&mut self) -> PResult<()> {
-        if self.eat(&Token::Sep) || self.at(Some(&Token::RBrace)) {
+    fn expect_stmt_end(&mut self) -> PResult<'src, ()> {
+        if self.eat(Token::Sep) || self.at(Some(Token::RBrace)) {
             Ok(())
         } else {
             Err(self.err_here([Expected::Token(Token::Sep)]))
@@ -122,16 +122,15 @@ where
     }
 
     /// Parses `fn ident(args...) { body }`.
-    fn fn_decl(&mut self) -> PResult<Stmt> {
+    fn fn_decl(&mut self) -> PResult<'src, Stmt> {
         self.advance(); // consume `fn`
         let name = self.ident()?;
 
-        self.expect(&Token::LParen)?;
-        if self.at(Some(&Token::RParen)) {
-            // Fail right at `)` instead of after the function body
+        self.expect(Token::LParen)?;
+        if self.at(Some(Token::RParen)) {
             return Err(self.err_here([Expected::Ident]));
         }
-        let mut args = self.delimited(&Token::Comma, &Token::RParen, Self::ident)?;
+        let mut args = self.delimited(Token::Comma, Token::RParen, Self::ident)?;
 
         let body: Box<[Stmt]> = self.block()?.into();
 
@@ -154,19 +153,19 @@ where
     }
 
     /// Parses `{ stmt* }` with inner separator handling and error recovery.
-    fn block(&mut self) -> PResult<Vec<Stmt>> {
-        self.expect(&Token::LBrace)?;
-        let stmts = self.parse_stmts_until(Some(&Token::RBrace));
-        self.expect(&Token::RBrace)?;
+    fn block(&mut self) -> PResult<'src, Vec<Stmt>> {
+        self.expect(Token::LBrace)?;
+        let stmts = self.parse_stmts_until(Some(Token::RBrace));
+        self.expect(Token::RBrace)?;
         Ok(stmts)
     }
 
     #[inline]
-    fn expr(&mut self) -> PResult<Expr> {
+    fn expr(&mut self) -> PResult<'src, Expr> {
         self.pratt(0)
     }
 
-    fn pratt(&mut self, min_prec: Prec) -> PResult<Expr> {
+    fn pratt(&mut self, min_prec: Prec) -> PResult<'src, Expr> {
         let mut lhs = self.prefix()?;
 
         while let Some(op) = self.peek_postfix_or_infix()
@@ -176,7 +175,7 @@ where
 
             lhs = match op {
                 PostfixOrInfix::Call => {
-                    let args = self.delimited(&Token::Comma, &Token::RParen, Self::expr)?;
+                    let args = self.delimited(Token::Comma, Token::RParen, Self::expr)?;
                     Expr::call_many(lhs, args)
                 }
                 PostfixOrInfix::Infix(infix_op) => {
@@ -197,26 +196,24 @@ where
         }
     }
 
-    fn prefix(&mut self) -> PResult<Expr> {
+    fn prefix(&mut self) -> PResult<'src, Expr> {
         let Some(tok) = self.peek_tok() else {
             return Err(self.err_here([Expected::Expr]));
         };
 
         match tok {
             Token::Int(n) => {
-                let n = *n;
                 self.advance();
                 Ok(Expr::Int(n))
             }
-            Token::Ident(name) => {
-                let name = name.clone();
+            Token::Ident(sym) => {
                 self.advance();
-                Ok(Expr::Ident(name))
+                Ok(Expr::Ident(sym))
             }
             Token::LParen => {
                 self.advance();
                 let inner = self.expr()?;
-                self.expect(&Token::RParen)?;
+                self.expect(Token::RParen)?;
                 Ok(inner)
             }
             other => {
@@ -236,32 +233,32 @@ where
     // =========================================================================
 
     #[inline]
-    fn peek_tok(&mut self) -> Option<&Token> {
-        self.toks.peek().map(|(tok, _)| tok)
+    fn peek_tok(&mut self) -> Option<Token> {
+        self.toks.peek().map(|&(tok, _)| tok)
     }
 
     #[inline]
-    fn advance(&mut self) -> Option<Spanned<Token>> {
+    fn advance(&mut self) -> Option<Spanned<'src, Token>> {
         self.toks.next()
     }
 
     #[inline]
-    fn at(&mut self, expected: Option<&Token>) -> bool {
+    fn at(&mut self, expected: Option<Token>) -> bool {
         self.peek_tok() == expected
     }
 
     #[inline]
-    fn eat(&mut self, expected: &Token) -> bool {
-        self.toks.next_if(|(t, _)| t == expected).is_some()
+    fn eat(&mut self, expected: Token) -> bool {
+        self.toks.next_if(|&(t, _)| t == expected).is_some()
     }
 
     #[inline]
-    fn eat_while(&mut self, expected: &Token) {
+    fn eat_while(&mut self, expected: Token) {
         while self.eat(expected) {}
     }
 
     #[inline]
-    fn expect(&mut self, expected: &Token) -> PResult<()> {
+    fn expect(&mut self, expected: Token) -> PResult<'src, ()> {
         if self.eat(expected) {
             Ok(())
         } else {
@@ -269,10 +266,9 @@ where
         }
     }
 
-    fn ident(&mut self) -> PResult<String> {
+    fn ident(&mut self) -> PResult<'src, Symbol> {
         match self.peek_tok() {
             Some(Token::Ident(name)) => {
-                let name = name.clone();
                 self.advance();
                 Ok(name)
             }
@@ -284,10 +280,10 @@ where
     /// Supports both empty lists `()` and trailing separators `(a, b,)`.
     fn delimited<T>(
         &mut self,
-        sep: &Token,
-        close: &Token,
-        mut f: impl FnMut(&mut Self) -> PResult<T>,
-    ) -> PResult<Vec<T>> {
+        sep: Token,
+        close: Token,
+        mut f: impl FnMut(&mut Self) -> PResult<'src, T>,
+    ) -> PResult<'src, Vec<T>> {
         let mut items = Vec::new();
 
         while !self.eat(close) {
@@ -309,7 +305,7 @@ where
     }
 
     /// Constructs a `PErr` at the current lookahead position without consuming the token.
-    fn err_here<const N: usize>(&mut self, expected: [Expected; N]) -> PErr {
+    fn err_here<const N: usize>(&mut self, expected: [Expected; N]) -> PErr<'src> {
         let (got, span) = self.toks.peek().cloned().unzip();
         PErr {
             span,
@@ -320,7 +316,7 @@ where
 
     /// Advances until a statement boundary or `end_delim`.
     /// Guarantees forward progress even if halted on an unexpected token.
-    fn sync(&mut self, end_delim: Option<&Token>) {
+    fn sync(&mut self, end_delim: Option<Token>) {
         // If we are stuck on a synchronization token (like a stray `}` at top-level)
         // that is NOT our enclosing block's closing delimiter, consume it so we make progress.
         if let Some(tok) = self.peek_tok()
@@ -333,7 +329,7 @@ where
         while let Some(tok) = self.peek_tok()
             && Some(tok) != end_delim
             && !matches!(tok, Token::Fn | Token::Return | Token::RBrace)
-            && !self.eat(&Token::Sep)
+            && !self.eat(Token::Sep)
         {
             self.advance();
         }

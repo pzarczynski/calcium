@@ -1,6 +1,6 @@
-use std::ops;
-
 use crate::Token;
+use crate::syntax::Symbol;
+use std::ops;
 
 pub type Program = Stmts;
 
@@ -36,7 +36,7 @@ pub enum Stmt {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Int(i64),
-    Ident(String),
+    Ident(Symbol),
     Prefix {
         op: PrefixOp,
         expr: Box<Expr>,
@@ -51,7 +51,7 @@ pub enum Expr {
         arg: Box<Expr>,
     },
     Fn {
-        arg: String,
+        arg: Symbol,
         body: Box<[Stmt]>,
     },
 }
@@ -94,7 +94,7 @@ impl Expr {
     }
 
     pub fn function(
-        args: impl IntoIterator<Item = String, IntoIter: DoubleEndedIterator>,
+        args: impl IntoIterator<Item = Symbol, IntoIter: DoubleEndedIterator>,
         body: impl Into<Box<[Stmt]>>,
     ) -> Option<Self> {
         let mut iter = args.into_iter().rev();
@@ -175,10 +175,10 @@ impl PrefixOp {
     }
 }
 
-impl TryFrom<&Token> for PrefixOp {
+impl TryFrom<Token> for PrefixOp {
     type Error = ();
 
-    fn try_from(value: &Token) -> Result<Self, Self::Error> {
+    fn try_from(value: Token) -> Result<Self, Self::Error> {
         match value {
             Token::Plus => Ok(PrefixOp::Pos),
             Token::Minus => Ok(PrefixOp::Neg),
@@ -202,10 +202,10 @@ impl InfixOp {
     }
 }
 
-impl TryFrom<&Token> for InfixOp {
+impl TryFrom<Token> for InfixOp {
     type Error = ();
 
-    fn try_from(value: &Token) -> Result<Self, Self::Error> {
+    fn try_from(value: Token) -> Result<Self, Self::Error> {
         match value {
             Token::Plus => Ok(InfixOp::Add),
             Token::Minus => Ok(InfixOp::Sub),

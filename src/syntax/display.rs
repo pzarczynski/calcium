@@ -1,80 +1,121 @@
-use crate::syntax::ast::*;
+use crate::{Interner, Symbol, Token, ast::*, syntax::parser::Expected};
 use std::fmt;
 
-impl fmt::Display for Stmts {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt_stmts(self.iter(), f)
-    }
+pub struct WithInterner<'a, T: ?Sized> {
+    pub node: &'a T,
+    pub interner: &'a Interner,
 }
 
-fn fmt_stmts<'a, I>(stmts: I, f: &mut fmt::Formatter<'_>) -> fmt::Result
-where
-    I: IntoIterator<Item = &'a Stmt>,
-{
-    let mut iter = stmts.into_iter();
-    if let Some(first) = iter.next() {
-        write!(f, "{first}")?;
-        for stmt in iter {
-            write!(f, " {stmt}")?;
+pub trait DisplayWithInterner {
+    fn with_interner<'a>(&'a self, interner: &'a Interner) -> WithInterner<'a, Self> {
+        WithInterner {
+            node: self,
+            interner,
         }
     }
-    Ok(())
 }
 
-impl fmt::Display for Stmt {
+impl<T: ?Sized> DisplayWithInterner for T {}
+
+impl fmt::Display for WithInterner<'_, Symbol> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Stmt::Expr(expr) => write!(f, "{expr};"),
-            Stmt::Return(expr) => write!(f, "return {expr};"),
+        f.write_str(self.interner.resolve(self.node))
+    }
+}
+
+impl fmt::Display for WithInterner<'_, Token> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let i = self.interner;
+        match self.node {
+            Token::Sep => f.write_str(";"),
+            Token::Eq => f.write_str("="),
+            Token::Fn => f.write_str("fn"),
+            Token::Return => f.write_str("return"),
+            Token::LParen => f.write_str("("),
+            Token::RParen => f.write_str(")"),
+            Token::LBrace => f.write_str("{"),
+            Token::RBrace => f.write_str("}"),
+            Token::Plus => f.write_str("+"),
+            Token::Minus => f.write_str("-"),
+            Token::Star => f.write_str("*"),
+            Token::Slash => f.write_str("/"),
+            Token::Comma => f.write_str(","),
+            Token::Int(n) => write!(f, "{n}"),
+            Token::Ident(sym) => write!(f, "{}", sym.with_interner(i)),
+        }
+    }
+}
+
+impl fmt::Display for WithInterner<'_, [Stmt]> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut iter = self.node.iter();
+        if let Some(first) = iter.next() {
+            write!(f, "{}", first.with_interner(self.interner))?;
+            for stmt in iter {
+                write!(f, " {}", stmt.with_interner(self.interner))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for WithInterner<'_, Stmts> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.node.0.as_slice().with_interner(self.interner))
+    }
+}
+
+impl fmt::Display for WithInterner<'_, Stmt> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let i = self.interner;
+        match self.node {
+            Stmt::Expr(expr) => write!(f, "{};", expr.with_interner(i)),
+            Stmt::Return(expr) => write!(f, "return {};", expr.with_interner(i)),
             Stmt::Assign {
                 lhs: Expr::Ident(name),
-                rhs: rhs @ Expr::Fn { .. },
-            } => fmt_fn_decl(name, rhs, f),
-            Stmt::Assign { lhs, rhs } => write!(f, "{lhs} = {rhs};"),
-        }
-    }
-}
-
-impl fmt::Display for Expr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.fmt_prec(f, 0)
-    }
-}
-
-/// Un-curries nested `Expr::Fn` chains back into `fn name(arg1, arg2) { body };`
-fn fmt_fn_decl(name: &str, mut curr: &Expr, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    write!(f, "fn {name}(")?;
-
-    let mut first = true;
-    let body = loop {
-        match curr {
-            Expr::Fn { arg, body } => {
-                if !first {
-                    f.write_str(", ")?;
-                }
-                first = false;
-                f.write_str(arg)?;
-
-                // Peel off auto-generated currying layers: `[Stmt::Return(Expr::Fn { .. })]`
-                if let [Stmt::Return(next @ Expr::Fn { .. })] = body.as_ref() {
-                    curr = next;
-                } else {
-                    break body;
-                }
+                rhs: Expr::Fn { arg, body },
+            } => {
+                write!(f, "fn {}", name.with_interner(i))?;
+                fmt_fn_chain(arg, body, f, i)?;
+                f.write_str(";")
             }
-            _ => unreachable!("fmt_fn_decl called on non-Fn expression"),
+            Stmt::Assign { lhs, rhs } => {
+                write!(f, "{} = {};", lhs.with_interner(i), rhs.with_interner(i))
+            }
         }
-    };
+    }
+}
 
-    f.write_str(") { ")?;
-    fmt_stmts(body.iter(), f)?;
-    f.write_str(" }")
+/// Shared helper to un-curry both named `fn f(a, b) { ... }` and anonymous `fn(a, b) { ... }`.
+fn fmt_fn_chain(
+    first_arg: &Symbol,
+    first_body: &[Stmt],
+    f: &mut fmt::Formatter<'_>,
+    i: &Interner,
+) -> fmt::Result {
+    write!(f, "({}", first_arg.with_interner(i))?;
+    let mut body = first_body;
+    while let [
+        Stmt::Return(Expr::Fn {
+            arg,
+            body: next_body,
+        }),
+    ] = body
+    {
+        write!(f, ", {}", arg.with_interner(i))?;
+        body = next_body;
+    }
+    write!(f, ") {{ {} }}", body.with_interner(i))
+}
+
+impl fmt::Display for WithInterner<'_, Expr> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.node.fmt_prec(f, self.interner, 0)
+    }
 }
 
 impl Expr {
-    fn fmt_prec(&self, f: &mut fmt::Formatter<'_>, min_prec: Prec) -> fmt::Result {
-        // Nested prefix expressions like `-(-x)` or `-(+x)` must be parenthesized
-        // to avoid lexing ambiguity (e.g. `--` token) and preserve clarity.
+    fn fmt_prec(&self, f: &mut fmt::Formatter<'_>, i: &Interner, min_prec: Prec) -> fmt::Result {
         let needs_parens = self.prec() < min_prec;
         if needs_parens {
             f.write_str("(")?;
@@ -82,15 +123,13 @@ impl Expr {
 
         match self {
             Self::Int(val) => write!(f, "{val}")?,
-            Self::Ident(name) => f.write_str(name)?,
+            Self::Ident(sym) => write!(f, "{}", sym.with_interner(i))?,
 
             Self::Prefix { op, expr } => {
                 write!(f, "{op}")?;
-                if matches!(expr.as_ref(), Self::Prefix { .. }) {
-                    write!(f, "({expr})")?;
-                } else {
-                    expr.fmt_prec(f, op.prec())?;
-                }
+                // Passing `op.prec() + 1` naturally forces parens on nested prefixes
+                // because `expr.prec() < op.prec() + 1` evaluates to true when `expr` is also a Prefix
+                expr.fmt_prec(f, i, op.prec() + 1)?;
             }
 
             Self::Infix { op, l, r } => {
@@ -99,21 +138,21 @@ impl Expr {
                     Assoc::Right(p) => (p + 1, p),
                 };
 
-                l.fmt_prec(f, l_bp)?;
+                l.fmt_prec(f, i, l_bp)?;
                 write!(f, " {op} ")?;
-                r.fmt_prec(f, r_bp)?;
+                r.fmt_prec(f, i, r_bp)?;
             }
 
-            // Fallback in case an `Expr::Fn` is ever formatted directly in isolation
             Self::Fn { arg, body } => {
-                write!(f, "fn({arg}) {{ ")?;
-                fmt_stmts(body.iter(), f)?;
-                f.write_str(" }")?;
+                f.write_str("fn")?;
+                fmt_fn_chain(arg, body, f, i)?;
             }
 
             Self::Call { fun, arg } => {
-                fun.fmt_prec(f, self.prec())?;
-                write!(f, "({arg})")?;
+                fun.fmt_prec(f, i, self.prec())?;
+                f.write_str("(")?;
+                arg.fmt_prec(f, i, 0)?;
+                f.write_str(")")?;
             }
         }
 
@@ -125,22 +164,33 @@ impl Expr {
     }
 }
 
-impl fmt::Display for InfixOp {
+impl fmt::Display for PrefixOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Add => "+",
-            Self::Sub => "-",
-            Self::Mul => "*",
-            Self::Div => "/",
-        })
+        match self {
+            Self::Pos => f.write_str("+"),
+            Self::Neg => f.write_str("-"),
+        }
     }
 }
 
-impl fmt::Display for PrefixOp {
+impl fmt::Display for InfixOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Pos => "+",
-            Self::Neg => "-",
-        })
+        match self {
+            Self::Add => f.write_str("+"),
+            Self::Sub => f.write_str("-"),
+            Self::Mul => f.write_str("*"),
+            Self::Div => f.write_str("/"),
+        }
+    }
+}
+
+impl fmt::Display for WithInterner<'_, Expected> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.node {
+            Expected::Expr => f.write_str("expression"),
+            Expected::Ident => f.write_str("identifier"),
+            Expected::Token(tok) => write!(f, "`{}`", tok.with_interner(self.interner)),
+            Expected::Stmt => f.write_str("statement"),
+        }
     }
 }

@@ -1,128 +1,103 @@
-use logos::Logos;
-use std::{fmt, ops::Range};
+use crate::syntax::Span;
+use lasso::{Key as _, Rodeo, Spur};
+use logos::{Lexer, Logos};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
+pub type Spanned<'src, T> = (T, Span<'src>);
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum LexError {
+    #[default]
+    UnexpectedToken,
+    IntOverflow,
 }
 
-impl<T: Into<usize>> From<Range<T>> for Span {
-    fn from(r: Range<T>) -> Self {
-        Span {
-            start: r.start.into(),
-            end: r.end.into(),
-        }
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Symbol(Spur);
+
+impl From<u16> for Symbol {
+    fn from(u: u16) -> Self {
+        Symbol(Spur::try_from_usize(u.into()).unwrap())
     }
 }
 
-impl ariadne::Span for Span {
-    type SourceId = ();
-
-    fn source(&self) -> &Self::SourceId {
-        &()
-    }
-
-    fn start(&self) -> usize {
-        self.start
-    }
-
-    fn end(&self) -> usize {
-        self.end
+impl core::ops::Deref for Symbol {
+    type Target = Spur;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
-pub type Spanned<T> = (T, Span);
+pub type Interner = Rodeo;
 
-pub trait Lex<'src>: Logos<'src> + Sized + 'src
-where
-    Self::Extras: Default,
-{
-    fn lex(src: &'src Self::Source) -> impl Iterator<Item = Spanned<Self>>;
+#[derive(Default)]
+pub struct Extras {
+    pub interner: Interner,
 }
 
-impl<'src> Lex<'src> for Token {
-    fn lex(src: &'src Self::Source) -> impl Iterator<Item = Spanned<Self>> {
-        Self::lexer(src).spanned().map(|(tok, r)| {
-            let span: Span = r.into();
-            match tok {
-                Ok(tok) => (tok, span),
-                Err(_) => (Self::Invalid, span),
-            }
-        })
-    }
+fn ident(lex: &mut Lexer<Token>) -> Symbol {
+    Symbol(lex.extras.interner.get_or_intern(lex.slice()))
 }
 
-#[derive(Logos, Debug, Clone, PartialEq, Eq, Hash)]
-#[logos(skip r"[ \r\n\t\f]+")]
+fn int(lex: &mut Lexer<Token>) -> Result<i64, LexError> {
+    lex.slice().parse().map_err(|_| LexError::IntOverflow)
+}
+
+#[derive(Logos, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[logos(extras = Extras, error = LexError, skip r"[ \r\n\t\f]+")]
 pub enum Token {
     #[regex(r";")]
     Sep,
-
     #[token("=")]
     Eq,
-
     #[token("fn")]
     Fn,
-
     #[token("return")]
     Return,
-
     #[token("(")]
     LParen,
-
     #[token(")")]
     RParen,
-
     #[token("{")]
     LBrace,
-
     #[token("}")]
     RBrace,
-
     #[token("+")]
     Plus,
-
     #[token("-")]
     Minus,
-
     #[token("*")]
     Star,
-
     #[token("/")]
     Slash,
-
     #[token(",")]
     Comma,
-
-    #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().unwrap())]
+    #[regex(r"[0-9]+", int)]
     Int(i64),
-
-    #[regex("[A-Za-z_][a-zA-Z0-9_]*", |lex| lex.slice().to_owned())]
-    Ident(String),
-
-    Invalid,
+    #[regex("[A-Za-z_][a-zA-Z0-9_]*", ident)]
+    Ident(Symbol),
 }
 
-impl fmt::Display for Token {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Token::Sep => write!(f, ";"),
-            Token::Eq => write!(f, "="),
-            Token::Fn => write!(f, "fn"),
-            Token::Return => write!(f, "return"),
-            Token::Plus => write!(f, "+"),
-            Token::Minus => write!(f, "-"),
-            Token::Star => write!(f, "*"),
-            Token::Slash => write!(f, "/"),
-            Token::Comma => write!(f, ","),
-            Token::LParen => write!(f, "("),
-            Token::RParen => write!(f, ")"),
-            Token::LBrace => write!(f, "{{"),
-            Token::RBrace => write!(f, "}}"),
-            Token::Int(n) => write!(f, "{n}"),
-            Token::Ident(id) => write!(f, "{id}"),
-            Token::Invalid => write!(f, "<invalid>"),
+pub struct Lexed<'src> {
+    pub tokens: Vec<(Token, Span<'src>)>,
+    pub errors: Vec<(LexError, Span<'src>)>,
+    pub interner: Interner,
+}
+
+impl<'src> Lexed<'src> {
+    pub fn new(source: &'src str, src: &str) -> Self {
+        let mut lexer = Token::lexer(src);
+        let (mut tokens, mut errors) = (Vec::new(), Vec::new());
+        while let Some(res) = lexer.next() {
+            let span = Span::from_range(source, lexer.span());
+            match res {
+                Ok(tok) => tokens.push((tok, span)),
+                Err(e) => errors.push((e, span)),
+            }
+        }
+        Lexed {
+            tokens,
+            errors,
+            interner: lexer.extras.interner,
         }
     }
 }

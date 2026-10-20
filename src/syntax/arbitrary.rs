@@ -3,12 +3,10 @@ use proptest::prelude::*;
 
 pub use crate::ast::Program;
 use crate::ast::*;
+use crate::syntax::Symbol;
 
-const KEYWORDS: &[&str] = &["fn", "return"];
-
-pub fn arb_ident() -> impl Strategy<Value = String> {
-    "[a-zA-Z_][a-zA-Z0-9_]{0,6}"
-        .prop_filter("must not be a keyword", |s| !KEYWORDS.contains(&s.as_str()))
+pub fn arb_sym() -> impl Strategy<Value = Symbol> {
+    (1..u16::MAX).prop_map(Into::into)
 }
 
 pub fn arb_int() -> impl Strategy<Value = i64> {
@@ -58,7 +56,7 @@ impl Arbitrary for Expr {
     fn arbitrary_with(p: ExprParams) -> Self::Strategy {
         let leaf = prop_oneof![
             arb_int().prop_map(Expr::Int),
-            arb_ident().prop_map(Expr::Ident)
+            arb_sym().prop_map(Expr::Ident)
         ];
         leaf.prop_recursive(p.depth, p.size, p.branch, |inner| {
             prop_oneof![
@@ -85,7 +83,7 @@ impl Arbitrary for Stmt {
             (expr(), expr()).prop_map(|(lhs, rhs)| Stmt::Assign { lhs, rhs }),
         ];
         leaf.prop_recursive(p.depth, p.size, p.branch, move |inner| {
-            (arb_ident(), btree_set(arb_ident(), 1..4), vec(inner, 0..4)).prop_filter_map(
+            (arb_sym(), btree_set(arb_sym(), 1..4), vec(inner, 0..4)).prop_filter_map(
                 "invalid function",
                 |(name, args, body)| {
                     let rhs = Expr::function(args.into_iter().collect::<Vec<_>>(), body)?;
