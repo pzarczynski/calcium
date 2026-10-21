@@ -1,15 +1,40 @@
+use std::cell::RefCell;
+
+use lasso::Key as _;
 use proptest::collection::{btree_set, vec};
 use proptest::prelude::*;
 
 pub use crate::ast::Program;
-use crate::ast::*;
 use crate::syntax::Symbol;
+use crate::{Interner, ast::*};
 
-pub fn arb_sym() -> impl Strategy<Value = Symbol> {
-    (1..u16::MAX).prop_map(Into::into)
+thread_local! {
+    static RODEO: RefCell<Interner> = RefCell::new(Interner::default());
 }
 
-pub fn arb_int() -> impl Strategy<Value = i64> {
+pub fn get_interner() -> Interner {
+    RODEO.with(|r| r.borrow().clone())
+}
+
+pub fn intern(s: &str) -> Symbol {
+    RODEO.with(|r| {
+        let spur = r.borrow_mut().get_or_intern(s);
+        let idx = spur.into_usize();
+        idx.try_into().expect("bad symbol")
+    })
+}
+
+pub fn resolve(sym: Symbol) -> String {
+    RODEO.with(|r| r.borrow().resolve(&sym).to_owned())
+}
+
+fn arb_sym() -> impl Strategy<Value = Symbol> {
+    "[a-z][a-z0-9_]{0,5}"
+        .prop_filter("keyword", |s| !matches!(s.as_str(), "fn" | "return"))
+        .prop_map(|s| intern(&s))
+}
+
+fn arb_int() -> impl Strategy<Value = i64> {
     0..=i64::MAX
 }
 

@@ -14,9 +14,11 @@ pub enum LexError {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Symbol(Spur);
 
-impl From<u16> for Symbol {
-    fn from(u: u16) -> Self {
-        Symbol(Spur::try_from_usize(u.into()).unwrap())
+impl TryFrom<usize> for Symbol {
+    type Error = ();
+
+    fn try_from(u: usize) -> Result<Self, Self::Error> {
+        Spur::try_from_usize(u).map(Symbol).ok_or(())
     }
 }
 
@@ -29,7 +31,7 @@ impl core::ops::Deref for Symbol {
 
 pub type Interner = Rodeo;
 
-#[derive(Default)]
+// #[derive(Default)]
 pub struct Extras {
     pub interner: Interner,
 }
@@ -85,7 +87,24 @@ pub struct Lexed<'src> {
 
 impl<'src> Lexed<'src> {
     pub fn new(source: &'src str, src: &str) -> Self {
-        let mut lexer = Token::lexer(src);
+        let interner = Interner::default();
+        Self::with_interner(source, src, interner)
+    }
+
+    pub fn with_interner(source: &'src str, src: &str, interner: Interner) -> Self {
+        let mut lexer = Token::lexer_with_extras(src, Extras { interner });
+        let (tokens, errors) = Self::lex(source, &mut lexer);
+        Self {
+            tokens,
+            errors,
+            interner: lexer.extras.interner,
+        }
+    }
+
+    fn lex(
+        source: &'src str,
+        lexer: &mut Lexer<Token>,
+    ) -> (Vec<Spanned<'src, Token>>, Vec<Spanned<'src, LexError>>) {
         let (mut tokens, mut errors) = (Vec::new(), Vec::new());
         while let Some(res) = lexer.next() {
             let span = Span::from_range(source, lexer.span());
@@ -94,10 +113,6 @@ impl<'src> Lexed<'src> {
                 Err(e) => errors.push((e, span)),
             }
         }
-        Lexed {
-            tokens,
-            errors,
-            interner: lexer.extras.interner,
-        }
+        (tokens, errors)
     }
 }

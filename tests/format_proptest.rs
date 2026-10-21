@@ -1,27 +1,26 @@
+use calcium::display::DisplayWithInterner;
 use calcium::syntax::arbitrary::*;
-use calcium::{Lex, Parser, Token};
+use calcium::{Lexed, Parser};
 use proptest::prelude::*;
 
 proptest! {
     // format(parse(format(ast))) == format(ast)
     #[test]
     fn test_pretty_printing_is_idempotent(ast in any::<Program>()) {
-        let printed = ast.to_string();
+        let interner = get_interner();
+        let printed = format!("{}", ast.with_interner(&interner));
 
-        let lexed = Token::lex(printed.as_str()).collect::<Vec<_>>();
-        let lexed_joined = lexed.clone().iter().map(|(t, _)| format!("{t}")).collect::<Vec<_>>().join(", ");
-        let lexed_valid = lexed
-            .iter().cloned().map(|(t, s)| match t {
-                Token::Invalid => panic!("Lexer failed:\nsource: {printed}\nlexed: {lexed_joined}"),
-                _ => (t, s)
-            });
+        let lexed = Lexed::with_interner("", printed.as_str(), interner.clone());
 
-        let parsed = Parser::parse(lexed_valid).unwrap_or_else(|errs| {
+        if !lexed.errors.is_empty() {
+            panic!("Lexer failed:\nsource: {printed}\nerrors: {:?}", lexed.errors);
+        }
+
+        let parsed = Parser::parse(lexed.tokens.into_iter()).unwrap_or_else(|errs| {
             panic!("Parser failed:\nsource: {printed}\nerrors: {errs:?}")
         });
 
-        let printed_twice = parsed.to_string();
-
+        let printed_twice = format!("{}", parsed.with_interner(&interner));
         prop_assert_eq!(printed, printed_twice);
     }
 }

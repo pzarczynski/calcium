@@ -1,3 +1,0 @@
-fn add(x) { return x }
-
-print(add(4, );

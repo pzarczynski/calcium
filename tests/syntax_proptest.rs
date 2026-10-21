@@ -1,17 +1,18 @@
+use calcium::display::DisplayWithInterner;
 use calcium::syntax::arbitrary::*;
-use calcium::{Lex, Parser, Token};
+use calcium::{Lexed, Parser};
 use proptest::prelude::*;
 
 proptest! {
     #[test]
     fn test_pipeline_never_panics_on_raw_strings(input in "\\PC*") {
-        Token::lex(&input).for_each(drop);
+        Lexed::new("", &input);
     }
 
     #[test]
     fn test_lexer_span_invariants(input in r"[.\w]*") {
         let mut cursor = 0;
-        for (_, span) in Token::lex(&input) {
+        for (_, span) in Lexed::new("", &input).tokens {
             let (start, end) = (span.start, span.end);
 
             prop_assert!(start >= cursor);
@@ -28,17 +29,16 @@ proptest! {
     // parse(format(ast)) == ast
     #[test]
     fn test_ast_round_trip(ast in any::<Program>()) {
-        let printed = ast.to_string();
+        let interner = get_interner();
+        let printed = format!("{}", ast.with_interner(&interner));
 
-        let lexed = Token::lex(printed.as_str()).collect::<Vec<_>>();
-        let lexed_joined = lexed.clone().iter().map(|t| format!("{t:?}")).collect::<Vec<_>>().join(", ");
-        let lexed_valid = lexed
-            .iter().cloned().map(|(t, s)| match t {
-                Token::Invalid => panic!("Lexer failed:\nsource: {printed}\nlexed: {lexed_joined}"),
-                _ => (t, s)
-            });
+        let lexed = Lexed::with_interner("", printed.as_str(), interner.clone());
 
-        let parsed = Parser::parse(lexed_valid).unwrap_or_else(|errs| {
+        if !lexed.errors.is_empty() {
+            panic!("Lexer failed:\nsource: {printed}\nerrors: {:?}", lexed.errors);
+        }
+
+        let parsed = Parser::parse(lexed.tokens.into_iter()).unwrap_or_else(|errs| {
             panic!("Parser failed:\nsource: {printed}\nerrors: {errs:?}")
         });
 
