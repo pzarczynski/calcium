@@ -1,35 +1,38 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileId(u32);
+
 /// A custom span type, because `logos::Span` is not `Copy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Span<'src> {
-    pub source: &'src str,
+pub struct Span {
+    pub fileid: FileId,
     pub start: usize,
     pub end: usize,
 }
 
-impl<'src> Span<'src> {
-    pub fn from_range(source: &'src str, r: std::ops::Range<impl Into<usize>>) -> Self {
+impl Span {
+    pub fn from_range(fileid: FileId, r: std::ops::Range<impl Into<usize>>) -> Self {
         Self {
-            source,
+            fileid,
             start: r.start.into(),
             end: r.end.into(),
         }
     }
 
-    pub fn from_eoi(source: &'src str, pos: impl Into<usize>) -> Self {
+    pub fn from_eoi(fileid: FileId, pos: impl Into<usize>) -> Self {
         let pos = pos.into();
         Self {
-            source,
+            fileid,
             start: pos,
             end: pos,
         }
     }
 }
 
-impl<'src> ariadne::Span for Span<'src> {
-    type SourceId = &'src str;
+impl ariadne::Span for Span {
+    type SourceId = FileId;
 
     fn source(&self) -> &Self::SourceId {
-        &self.source
+        &self.fileid
     }
 
     fn start(&self) -> usize {

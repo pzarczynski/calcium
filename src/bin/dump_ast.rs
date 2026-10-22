@@ -3,9 +3,9 @@ use std::fs;
 use std::process::ExitCode;
 
 use ariadne::{Color, Label, Report, ReportKind, Source};
-use calcium::display::DisplayWithInterner;
-use calcium::syntax::parser::{Expected, PErr};
-use calcium::{Interner, Lexed, Parser, Span};
+use veles::display::DisplayWithInterner;
+use veles::syntax::parser::{Expected, PErr};
+use veles::{Interner, Lexed, Parser, Span};
 
 fn format_expected(expected: &[Expected], interner: &Interner) -> String {
     match expected {

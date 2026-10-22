@@ -1,7 +1,7 @@
-use calcium::display::DisplayWithInterner;
-use calcium::syntax::arbitrary::*;
-use calcium::{Lexed, Parser};
 use proptest::prelude::*;
+use veles::display::DisplayWithInterner;
+use veles::syntax::arbitrary::*;
+use veles::{Lexed, Parser};
 
 proptest! {
     // format(parse(format(ast))) == format(ast)

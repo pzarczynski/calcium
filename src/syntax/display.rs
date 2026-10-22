@@ -59,9 +59,10 @@ impl fmt::Display for WithInterner<'_, [Stmt]> {
     }
 }
 
-impl fmt::Display for WithInterner<'_, Stmts> {
+impl fmt::Display for WithInterner<'_, Program> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.node.0.as_slice().with_interner(self.interner))
+        let fmt_prog = self.node.stmts.as_slice().with_interner(self.interner);
+        write!(f, "{}", fmt_prog)
     }
 }
 
@@ -132,15 +133,15 @@ impl Expr {
                 expr.fmt_prec(f, i, op.prec() + 1)?;
             }
 
-            Self::Infix { op, l, r } => {
+            Self::Infix { op, lhs, rhs } => {
                 let (l_bp, r_bp) = match op.assoc() {
                     Assoc::Left(p) => (p, p + 1),
                     Assoc::Right(p) => (p + 1, p),
                 };
 
-                l.fmt_prec(f, i, l_bp)?;
+                lhs.fmt_prec(f, i, l_bp)?;
                 write!(f, " {op} ")?;
-                r.fmt_prec(f, i, r_bp)?;
+                rhs.fmt_prec(f, i, r_bp)?;
             }
 
             Self::Fn { arg, body } => {

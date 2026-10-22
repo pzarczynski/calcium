@@ -1,29 +1,9 @@
 use crate::Token;
 use crate::syntax::Symbol;
-use std::ops;
-
-pub type Program = Stmts;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Stmts(pub Vec<Stmt>);
-
-impl ops::Deref for Stmts {
-    type Target = Vec<Stmt>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl ops::DerefMut for Stmts {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl From<Vec<Stmt>> for Stmts {
-    fn from(v: Vec<Stmt>) -> Self {
-        Stmts(v)
-    }
+pub struct Program {
+    pub stmts: Vec<Stmt>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -43,8 +23,8 @@ pub enum Expr {
     },
     Infix {
         op: InfixOp,
-        l: Box<Expr>,
-        r: Box<Expr>,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
     },
     Call {
         fun: Box<Expr>,
@@ -77,8 +57,8 @@ impl Expr {
     pub fn infix(lhs: Expr, op: InfixOp, rhs: Expr) -> Self {
         Expr::Infix {
             op,
-            l: Box::new(lhs),
-            r: Box::new(rhs),
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
         }
     }
 

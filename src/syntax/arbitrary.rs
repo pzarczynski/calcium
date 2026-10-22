@@ -129,7 +129,7 @@ impl Arbitrary for Program {
 
     fn arbitrary_with(p: StmtParams) -> Self::Strategy {
         vec(any_with::<Stmt>(p), 0..10)
-            .prop_map(Program::from)
+            .prop_map(|stmts| Program { stmts })
             .boxed()
     }
 }
