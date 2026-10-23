@@ -1,45 +1,27 @@
-use std::cell::RefCell;
-
 use crate::syntax::{Span, span::FileId};
-use lasso::{Key as _, Rodeo, Spur};
 use logos::Logos;
-
-thread_local! {
-    static INTERNER: RefCell<Rodeo> = RefCell::new(Rodeo::default());
-}
+use crate::{Ctx, Symbol};
+use itertools::{Either, Itertools};
 
 pub type Spanned<T> = (T, Span);
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum LexError {
     #[default]
-    UnexpectedToken,
+    InvalidToken,
     IntOverflow,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Symbol(Spur);
-
-impl Symbol {
-    pub fn intern(s: &str) -> Self {
-        INTERNER.with(|r| Self(r.borrow_mut().get_or_intern(s)))
-    }
-
-    pub fn as_str(&self) -> String {
-        INTERNER.with(|r| r.borrow().resolve(&self.0).to_owned())
-    }
+fn int(lex: &mut logos::Lexer<Token>) -> Result<i64, LexError> {
+    lex.slice().parse().map_err(|_| LexError::IntOverflow)
 }
 
-impl TryFrom<usize> for Symbol {
-    type Error = ();
-
-    fn try_from(u: usize) -> Result<Self, Self::Error> {
-        Spur::try_from_usize(u).map(Symbol).ok_or(())
-    }
+fn ident(lex: &mut logos::Lexer<Token>) -> Result<Symbol, LexError> {
+    Ok(lex.extras.intern(lex.slice()))
 }
 
 #[derive(Logos, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[logos(error = LexError, skip r"[ \r\n\t\f]+")]
+#[logos(error = LexError, extras = Ctx, skip r"[ \r\n\t\f]+")]
 pub enum Token {
     #[regex(r";")]
     Sep,
@@ -67,34 +49,33 @@ pub enum Token {
     Slash,
     #[token(",")]
     Comma,
-    #[regex(
-        r"[0-9]+", 
-        |lex| lex.slice().parse().map_err(|_| LexError::IntOverflow)
-    )]
+    #[regex(r"[0-9]+", int)]
     Int(i64),
-    #[regex(
-        "[A-Za-z_][a-zA-Z0-9_]*", 
-        |lex| Symbol::intern(lex.slice())
-    )]
+    #[regex("[A-Za-z_][a-zA-Z0-9_]*", ident)]
     Ident(Symbol),
 }
 
 pub struct Lexed {
-    pub tokens: Vec<(Token, Span)>,
-    pub errors: Vec<(LexError, Span)>,
+    pub tokens: Vec<Spanned<Token>>,
+    pub errors: Vec<Spanned<LexError>>,
 }
 
 impl Lexed {
     pub fn new(fileid: FileId, src: &str) -> Self {
-        let (mut tokens, mut errors) = (Vec::new(), Vec::new());
-        let mut lexer = Token::lexer(src);
-        while let Some(res) = lexer.next() {
-            let span = Span::from_range(fileid, lexer.span());
-            match res {
-                Ok(tok) => tokens.push((tok, span)),
-                Err(e) => errors.push((e, span)),
+        Self::with_ctx(fileid, src, Ctx::default())
+    }
+
+    pub fn with_ctx(fileid: FileId, src: &str, ctx: Ctx) -> Self {
+        let (toks, errs): (Vec<_>, Vec<_>) = Token::lexer_with_extras(src, ctx)
+            .spanned()
+            .partition_map(|(res, range)| {
+                let span = Span::from_range(fileid, range);
+                match res {
+                    Ok(tok) => Either::Left((tok, span)),
+                    Err(e) => Either::Right((e, span)),
+                }
             }
-        }
-        Self { tokens, errors }
+        );
+        Self { tokens: toks, errors: errs }
     }
 }

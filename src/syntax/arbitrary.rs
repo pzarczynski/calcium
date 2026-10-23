@@ -1,37 +1,14 @@
-use std::cell::RefCell;
-
-use lasso::Key as _;
 use proptest::collection::{btree_set, vec};
 use proptest::prelude::*;
 
 pub use crate::ast::Program;
 use crate::syntax::Symbol;
-use crate::{Interner, ast::*};
+use crate::{Ctx, ast::*};
 
-thread_local! {
-    static RODEO: RefCell<Interner> = RefCell::new(Interner::default());
-}
-
-pub fn get_interner() -> Interner {
-    RODEO.with(|r| r.borrow().clone())
-}
-
-pub fn intern(s: &str) -> Symbol {
-    RODEO.with(|r| {
-        let spur = r.borrow_mut().get_or_intern(s);
-        let idx = spur.into_usize();
-        idx.try_into().expect("bad symbol")
-    })
-}
-
-pub fn resolve(sym: Symbol) -> String {
-    RODEO.with(|r| r.borrow().resolve(&sym).to_owned())
-}
-
-fn arb_sym() -> impl Strategy<Value = Symbol> {
+fn arb_sym(ctx: Ctx) -> impl Strategy<Value = Symbol>  {
     "[a-z][a-z0-9_]{0,5}"
         .prop_filter("keyword", |s| !matches!(s.as_str(), "fn" | "return"))
-        .prop_map(|s| intern(&s))
+        .prop_map(move |s| ctx.intern(&s))
 }
 
 fn arb_int() -> impl Strategy<Value = i64> {
@@ -40,17 +17,25 @@ fn arb_int() -> impl Strategy<Value = i64> {
 
 #[derive(Clone, Debug)]
 pub struct ExprParams {
+    pub ctx: Ctx,
     pub depth: u32,
     pub size: u32,
     pub branch: u32,
 }
 
+impl ExprParams {
+    pub fn default_with_ctx(ctx: Ctx) -> Self {
+        Self { ctx, ..Self::default() }
+    }
+}
+
 impl Default for ExprParams {
     fn default() -> Self {
         Self {
+            ctx: Ctx::default(),
             depth: 3,
-            size: 8,
-            branch: 3,
+            size: 10,
+            branch: 5,
         }
     }
 }
@@ -60,16 +45,16 @@ pub struct StmtParams {
     pub depth: u32,
     pub size: u32,
     pub branch: u32,
-    pub expr: ExprParams,
+    pub ctx: Ctx,
 }
 
 impl Default for StmtParams {
     fn default() -> Self {
         Self {
-            depth: 2,
-            size: 6,
-            branch: 2,
-            expr: ExprParams::default(),
+            depth: 3,
+            size: 10,
+            branch: 5,
+            ctx: Ctx::default(),
         }
     }
 }
@@ -81,7 +66,7 @@ impl Arbitrary for Expr {
     fn arbitrary_with(p: ExprParams) -> Self::Strategy {
         let leaf = prop_oneof![
             arb_int().prop_map(Expr::Int),
-            arb_sym().prop_map(Expr::Ident)
+            arb_sym(p.ctx).prop_map(Expr::Ident)
         ];
         leaf.prop_recursive(p.depth, p.size, p.branch, |inner| {
             prop_oneof![
@@ -101,21 +86,17 @@ impl Arbitrary for Stmt {
     type Strategy = BoxedStrategy<Self>;
 
     fn arbitrary_with(p: StmtParams) -> Self::Strategy {
-        let expr = || any_with::<Expr>(p.expr.clone());
+        let expr = || any_with::<Expr>(ExprParams::default_with_ctx(p.ctx.clone()));
         let leaf = prop_oneof![
             expr().prop_map(Stmt::Return),
             expr().prop_map(Stmt::Expr),
             (expr(), expr()).prop_map(|(lhs, rhs)| Stmt::Assign { lhs, rhs }),
         ];
         leaf.prop_recursive(p.depth, p.size, p.branch, move |inner| {
-            (arb_sym(), btree_set(arb_sym(), 1..4), vec(inner, 0..4)).prop_filter_map(
-                "invalid function",
-                |(name, args, body)| {
+            (arb_sym(p.ctx.clone()), btree_set(arb_sym(p.ctx.clone()), 1..4), vec(inner, 0..4))
+                .prop_filter_map("invalid function", move |(name, args, body)| {
                     let rhs = Expr::function(args.into_iter().collect::<Vec<_>>(), body)?;
-                    Some(Stmt::Assign {
-                        lhs: Expr::Ident(name),
-                        rhs,
-                    })
+                    Some(Stmt::Assign { lhs: Expr::Ident(name), rhs,})
                 },
             )
         })

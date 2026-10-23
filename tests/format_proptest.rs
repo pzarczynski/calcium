@@ -7,7 +7,6 @@ proptest! {
     // format(parse(format(ast))) == format(ast)
     #[test]
     fn test_pretty_printing_is_idempotent(ast in any::<Program>()) {
-        let interner = get_interner();
         let printed = format!("{}", ast.with_interner(&interner));
 
         let lexed = Lexed::with_interner("", printed.as_str(), interner.clone());

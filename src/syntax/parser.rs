@@ -1,5 +1,6 @@
 use crate::syntax::ast::*;
-use crate::syntax::{Span, Spanned, Symbol, Token};
+use crate::Symbol;
+use crate::syntax::{Span, Spanned, Token};
 use std::iter::Peekable;
 
 const EOI: Option<Token> = None;

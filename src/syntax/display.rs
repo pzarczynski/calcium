@@ -1,31 +1,28 @@
-use crate::{Interner, Symbol, Token, ast::*, syntax::parser::Expected};
+use crate::{Ctx, Symbol, Token, ast::*, syntax::parser::Expected};
 use std::fmt;
 
-pub struct WithInterner<'a, T: ?Sized> {
+pub struct WithCtx<'a, T: ?Sized> {
     pub node: &'a T,
-    pub interner: &'a Interner,
+    pub ctx: &'a Ctx,
 }
 
-pub trait DisplayWithInterner {
-    fn with_interner<'a>(&'a self, interner: &'a Interner) -> WithInterner<'a, Self> {
-        WithInterner {
-            node: self,
-            interner,
-        }
+pub trait AttachCtx {
+    fn attach<'a>(&'a self, ctx: &'a Ctx) -> WithCtx<'a, Self> {
+        WithCtx { node: self, ctx }
     }
 }
 
-impl<T: ?Sized> DisplayWithInterner for T {}
+impl<T: ?Sized> AttachCtx for T {}
 
-impl fmt::Display for WithInterner<'_, Symbol> {
+impl fmt::Display for WithCtx<'_, Symbol> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.interner.resolve(self.node))
+        f.write_str(self.ctx.resolve(self.node))
     }
 }
 
-impl fmt::Display for WithInterner<'_, Token> {
+impl fmt::Display for WithCtx<'_, Token> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let i = self.interner;
+        let ctx = self.ctx;
         match self.node {
             Token::Sep => f.write_str(";"),
             Token::Eq => f.write_str("="),
@@ -41,47 +38,47 @@ impl fmt::Display for WithInterner<'_, Token> {
             Token::Slash => f.write_str("/"),
             Token::Comma => f.write_str(","),
             Token::Int(n) => write!(f, "{n}"),
-            Token::Ident(sym) => write!(f, "{}", sym.with_interner(i)),
+            Token::Ident(sym) => write!(f, "{}", sym.attach(ctx)),
         }
     }
 }
 
-impl fmt::Display for WithInterner<'_, [Stmt]> {
+impl fmt::Display for WithCtx<'_, [Stmt]> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut iter = self.node.iter();
         if let Some(first) = iter.next() {
-            write!(f, "{}", first.with_interner(self.interner))?;
+            write!(f, "{}", first.attach(self.ctx))?;
             for stmt in iter {
-                write!(f, " {}", stmt.with_interner(self.interner))?;
+                write!(f, " {}", stmt.attach(self.ctx))?;
             }
         }
         Ok(())
     }
 }
 
-impl fmt::Display for WithInterner<'_, Program> {
+impl fmt::Display for WithCtx<'_, Program> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let fmt_prog = self.node.stmts.as_slice().with_interner(self.interner);
+        let fmt_prog = self.node.stmts.as_slice().attach(self.ctx);
         write!(f, "{}", fmt_prog)
     }
 }
 
-impl fmt::Display for WithInterner<'_, Stmt> {
+impl fmt::Display for WithCtx<'_, Stmt> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let i = self.interner;
+        let ctx = self.ctx;
         match self.node {
-            Stmt::Expr(expr) => write!(f, "{};", expr.with_interner(i)),
-            Stmt::Return(expr) => write!(f, "return {};", expr.with_interner(i)),
+            Stmt::Expr(expr) => write!(f, "{};", expr.attach(ctx)),
+            Stmt::Return(expr) => write!(f, "return {};", expr.attach(ctx)),
             Stmt::Assign {
                 lhs: Expr::Ident(name),
                 rhs: Expr::Fn { arg, body },
             } => {
-                write!(f, "fn {}", name.with_interner(i))?;
-                fmt_fn_chain(arg, body, f, i)?;
+                write!(f, "fn {}", name.attach(ctx))?;
+                fmt_fn_chain(arg, body, f, ctx)?;
                 f.write_str(";")
             }
             Stmt::Assign { lhs, rhs } => {
-                write!(f, "{} = {};", lhs.with_interner(i), rhs.with_interner(i))
+                write!(f, "{} = {};", lhs.attach(ctx), rhs.attach(ctx))
             }
         }
     }
@@ -92,9 +89,9 @@ fn fmt_fn_chain(
     first_arg: &Symbol,
     first_body: &[Stmt],
     f: &mut fmt::Formatter<'_>,
-    i: &Interner,
+    ctx: &Ctx,
 ) -> fmt::Result {
-    write!(f, "({}", first_arg.with_interner(i))?;
+    write!(f, "({}", first_arg.attach(ctx))?;
     let mut body = first_body;
     while let [
         Stmt::Return(Expr::Fn {
@@ -103,20 +100,20 @@ fn fmt_fn_chain(
         }),
     ] = body
     {
-        write!(f, ", {}", arg.with_interner(i))?;
+        write!(f, ", {}", arg.attach(ctx))?;
         body = next_body;
     }
-    write!(f, ") {{ {} }}", body.with_interner(i))
+    write!(f, ") {{ {} }}", body.attach(ctx))
 }
 
-impl fmt::Display for WithInterner<'_, Expr> {
+impl fmt::Display for WithCtx<'_, Expr> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.node.fmt_prec(f, self.interner, 0)
+        self.node.fmt_prec(f, self.ctx, 0)
     }
 }
 
 impl Expr {
-    fn fmt_prec(&self, f: &mut fmt::Formatter<'_>, i: &Interner, min_prec: Prec) -> fmt::Result {
+    fn fmt_prec(&self, f: &mut fmt::Formatter<'_>, ctx: &Ctx, min_prec: Prec) -> fmt::Result {
         let needs_parens = self.prec() < min_prec;
         if needs_parens {
             f.write_str("(")?;
@@ -124,13 +121,13 @@ impl Expr {
 
         match self {
             Self::Int(val) => write!(f, "{val}")?,
-            Self::Ident(sym) => write!(f, "{}", sym.with_interner(i))?,
+            Self::Ident(sym) => write!(f, "{}", sym.attach(ctx))?,
 
             Self::Prefix { op, expr } => {
                 write!(f, "{op}")?;
                 // Passing `op.prec() + 1` naturally forces parens on nested prefixes
                 // because `expr.prec() < op.prec() + 1` evaluates to true when `expr` is also a Prefix
-                expr.fmt_prec(f, i, op.prec() + 1)?;
+                expr.fmt_prec(f, ctx, op.prec() + 1)?;
             }
 
             Self::Infix { op, lhs, rhs } => {
@@ -139,20 +136,20 @@ impl Expr {
                     Assoc::Right(p) => (p + 1, p),
                 };
 
-                lhs.fmt_prec(f, i, l_bp)?;
+                lhs.fmt_prec(f, ctx, l_bp)?;
                 write!(f, " {op} ")?;
-                rhs.fmt_prec(f, i, r_bp)?;
+                rhs.fmt_prec(f, ctx, r_bp)?;
             }
 
             Self::Fn { arg, body } => {
                 f.write_str("fn")?;
-                fmt_fn_chain(arg, body, f, i)?;
+                fmt_fn_chain(arg, body, f, ctx)?;
             }
 
             Self::Call { fun, arg } => {
-                fun.fmt_prec(f, i, self.prec())?;
+                fun.fmt_prec(f, ctx, self.prec())?;
                 f.write_str("(")?;
-                arg.fmt_prec(f, i, 0)?;
+                arg.fmt_prec(f, ctx, 0)?;
                 f.write_str(")")?;
             }
         }
@@ -185,12 +182,12 @@ impl fmt::Display for InfixOp {
     }
 }
 
-impl fmt::Display for WithInterner<'_, Expected> {
+impl fmt::Display for WithCtx<'_, Expected> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.node {
             Expected::Expr => f.write_str("expression"),
             Expected::Ident => f.write_str("identifier"),
-            Expected::Token(tok) => write!(f, "`{}`", tok.with_interner(self.interner)),
+            Expected::Token(tok) => write!(f, "`{}`", tok.attach(self.ctx)),
             Expected::Stmt => f.write_str("statement"),
         }
     }

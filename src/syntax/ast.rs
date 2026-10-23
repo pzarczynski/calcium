@@ -1,5 +1,16 @@
 use crate::Token;
-use crate::syntax::Symbol;
+use lasso::{Key, Spur};
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Symbol(pub Spur);
+
+impl TryFrom<usize> for Symbol {
+    type Error = ();
+
+    fn try_from(u: usize) -> Result<Self, Self::Error> {
+        Spur::try_from_usize(u).map(Symbol).ok_or(())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
